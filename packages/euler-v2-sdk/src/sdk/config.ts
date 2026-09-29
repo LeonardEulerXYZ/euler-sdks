@@ -100,6 +100,7 @@ export interface EulerSDKConfig {
 	oracleAdapterV3ApiKey?: string;
 	oracleAdapterV3PageSize?: number;
 	oracleAdapterV3CacheMs?: number;
+	vaultAssessmentV3CacheMs?: number;
 
 	feeFlowControllerAddress?: Address;
 	feeFlowControllerUtilAddress?: Address;

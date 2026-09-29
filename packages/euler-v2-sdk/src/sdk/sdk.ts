@@ -20,6 +20,7 @@ import type { IPriceService } from "../services/priceService/index.js";
 import type { IRewardsService } from "../services/rewardsService/index.js";
 import type { IIntrinsicApyService } from "../services/intrinsicApyService/index.js";
 import type { IOracleAdapterService } from "../services/oracleAdapterService/index.js";
+import { UnavailableVaultAssessmentService, type IVaultAssessmentService } from "../services/vaultAssessmentService/index.js";
 import type { IFeeFlowService } from "../services/feeFlowService/index.js";
 import type { IREULLockService } from "../services/reulLockService/index.js";
 import {
@@ -59,6 +60,7 @@ export interface EulerSDKOptions<
 	rewardsService: IRewardsService;
 	intrinsicApyService: IIntrinsicApyService;
 	oracleAdapterService: IOracleAdapterService;
+	vaultAssessmentService?: IVaultAssessmentService;
 	feeFlowService: IFeeFlowService;
 	reulLockService: IREULLockService;
 	/** Defaults to a `SafeAccountService` built on `providerService` when omitted. */
@@ -87,6 +89,7 @@ export class EulerSDK<TVaultEntity extends IVaultEntity = VaultEntity> {
 	public readonly rewardsService: IRewardsService;
 	public readonly intrinsicApyService: IIntrinsicApyService;
 	public readonly oracleAdapterService: IOracleAdapterService;
+	public readonly vaultAssessmentService: IVaultAssessmentService;
 	public readonly feeFlowService: IFeeFlowService;
 	public readonly reulLockService: IREULLockService;
 	public readonly safeAccountService: ISafeAccountService;
@@ -118,6 +121,7 @@ export class EulerSDK<TVaultEntity extends IVaultEntity = VaultEntity> {
 		this.rewardsService = options.rewardsService;
 		this.intrinsicApyService = options.intrinsicApyService;
 		this.oracleAdapterService = options.oracleAdapterService;
+		this.vaultAssessmentService = options.vaultAssessmentService ?? new UnavailableVaultAssessmentService();
 		this.feeFlowService = options.feeFlowService;
 		this.reulLockService = options.reulLockService;
 		this.safeAccountService =

@@ -97,6 +97,12 @@ import {
 	UnavailableOracleAdapterService,
 } from "../services/oracleAdapterService/index.js";
 import {
+	VaultAssessmentService,
+	UnavailableVaultAssessmentService,
+	type IVaultAssessmentService,
+	type VaultAssessmentServiceConfig,
+} from "../services/vaultAssessmentService/index.js";
+import {
 	DEFAULT_EULER_LABELS_BASE_URL,
 	DEFAULT_TOKENLIST_API_BASE_URL,
 	DEFAULT_V3_API_URL,
@@ -211,6 +217,7 @@ export interface BuildSDKOverrides<
 	rewardsService?: IRewardsService;
 	intrinsicApyService?: IIntrinsicApyService;
 	oracleAdapterService?: IOracleAdapterService;
+	vaultAssessmentService?: IVaultAssessmentService;
 	feeFlowService?: IFeeFlowService;
 	reulLockService?: IREULLockService;
 	safeAccountService?: ISafeAccountService;
@@ -246,6 +253,7 @@ export interface BuildSDKOptions<
 	rewardsServiceConfig?: RewardsServiceConfig;
 	intrinsicApyServiceConfig?: IntrinsicApyServiceConfig;
 	oracleAdapterServiceConfig?: OracleAdapterServiceConfig;
+	vaultAssessmentServiceConfig?: VaultAssessmentServiceConfig;
 	feeFlowServiceConfig?: FeeFlowServiceConfig;
 	positionMigrationServiceConfig?: PositionMigrationServiceConfig;
 	positionMigrationConnectorConfig?: {
@@ -560,6 +568,7 @@ export async function buildEulerSDK<
 		rewardsServiceConfig,
 		intrinsicApyServiceConfig,
 		oracleAdapterServiceConfig,
+		vaultAssessmentServiceConfig,
 		queryCacheConfig,
 		buildQuery,
 		plugins,
@@ -1507,6 +1516,24 @@ export async function buildEulerSDK<
 					),
 					resolvedBuildQuery,
 				));
+	const vaultAssessmentService =
+		servicesOverrides?.vaultAssessmentService ??
+		(disableV3
+			? new UnavailableVaultAssessmentService("v3-disabled")
+			: new VaultAssessmentService(
+					resolveV3AdapterConfig<VaultAssessmentServiceConfig & { endpoint: string }>(
+						{ endpoint: DEFAULT_V3_API_URL },
+						{
+							explicitConfig: vaultAssessmentServiceConfig,
+							explicitV3ApiKey: v3ApiKey,
+							envConfig,
+							config,
+							envExtra: maybeField("cacheMs", envConfig.vaultAssessmentV3CacheMs),
+							configExtra: maybeField("cacheMs", config?.vaultAssessmentV3CacheMs),
+						},
+					),
+					resolvedBuildQuery,
+				));
 	const feeFlowService =
 		servicesOverrides?.feeFlowService ??
 		new FeeFlowService(
@@ -1702,6 +1729,7 @@ export async function buildEulerSDK<
 		rewardsService,
 		intrinsicApyService,
 		oracleAdapterService,
+		vaultAssessmentService,
 		feeFlowService,
 		reulLockService,
 		safeAccountService,
