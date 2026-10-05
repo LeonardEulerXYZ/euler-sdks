@@ -23,6 +23,7 @@ import {
 
 const MAX_PUBLIC_LABEL_RECORDS = 10_000;
 const ENTITY_ADDRESS_CONCURRENCY = 8;
+const PUBLIC_VAULT_TYPES: readonly string[] = ["evk", "earn", "securitize"];
 const VERSION_KEY_RE = /^v[0-9]{17}$/;
 const isPublishedVersionKey = (value: string): boolean =>
 	/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(value) &&
@@ -384,7 +385,8 @@ export const fetchPublicLabelsMetadata = async (
 		if (
 			row.chainId !== chainId ||
 			!/^0x[0-9a-fA-F]{40}$/.test(row.address) ||
-			!["evk", "earn", "securitize", "escrow"].includes(row.vaultType) ||
+			!PUBLIC_VAULT_TYPES.includes(row.vaultType) ||
+			typeof row.isEscrow !== "boolean" ||
 			typeof row.deprecated !== "boolean" ||
 			!Array.isArray(row.tags)
 		)

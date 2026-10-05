@@ -281,6 +281,28 @@ describe("PublicLabelsV3Adapter", () => {
 			fetchAllPublicLabelPages(request, "/labels/products", {}),
 		).rejects.toThrow("Invalid Public Labels page");
 	});
+	it.each([
+		{ vaultType: "escrow" },
+		{ isEscrow: undefined },
+		{ isEscrow: "true" },
+	])("rejects a vault row shaped %j", async (patch) => {
+		const base = fixtureRequest();
+		const request: PublicLabelsRequest = async <T>(path: string, query: PublicLabelsQuery) =>
+			path === "/labels/vaults"
+				? (response(
+						publicLabelsFixture.vaults.map((vault, index) =>
+							index === 0 ? { ...vault, ...patch } : vault,
+						),
+						publicLabelsFixture.vaults.length,
+					) as PublicLabelsResponse<T>)
+				: base<T>(path, query);
+		const adapter = new PublicLabelsV3Adapter({ endpoint: "https://v3.test", request });
+
+		await expect(
+			adapter.fetchPublicLabelsSnapshot(1, PUBLIC_LABELS_FIXTURE_VERSION),
+		).rejects.toThrow("Invalid resolved vault labels");
+	});
+
 	it("rejects unsafe entity IDs before constructing profile paths", async () => {
 		const request = fixtureRequest({ productEntityId: "../unsafe" });
 		const adapter = new PublicLabelsV3Adapter({
@@ -375,6 +397,31 @@ describe("normalizePublicLabelsData", () => {
 		expect(Object.keys(result.products)).not.toContain(
 			`__vault_${NEUTRAL_ESCROW.toLowerCase()}`,
 		);
+	});
+
+	it("keeps an escrow row as inventory even with a name and a visible verdict", () => {
+		const escrow = publicLabelsFixture.vaults.find(
+			(vault) => vault.address === NEUTRAL_ESCROW,
+		)!;
+		const source = {
+			...publicLabelsFixture,
+			vaults: [{ ...escrow, name: "Escrow WETH" }],
+			visibility: {
+				[NEUTRAL_ESCROW.toLowerCase()]: {
+					status: "visible" as const,
+					explorableLend: true,
+					explorableBorrow: false,
+					decidedBy: "escrow",
+					reason: null,
+				},
+			},
+		};
+
+		expect(normalizePublicLabelsData(1, source).verifiedVaultAddresses).toEqual([]);
+		expect(Object.keys(normalizePublicLabelsData(1, source).products)).toEqual([
+			"kpk-securitize",
+		]);
+		expect(normalizePublicLabelsMetadata(1, source).candidateVaultAddresses).toEqual([]);
 	});
 
 	it("keeps mixed vault tags scoped to their vault overrides", () => {

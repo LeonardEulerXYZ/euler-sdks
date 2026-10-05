@@ -24,7 +24,9 @@ export interface PublicVaultCampaign {
 export interface PublicVaultLabel {
 	chainId: number;
 	address: string;
-	vaultType: "evk" | "earn" | "securitize" | "escrow";
+	vaultType: "evk" | "earn" | "securitize";
+	/** Orthogonal to vaultType: an escrow vault is an ungoverned EVK vault, so it has no curator. */
+	isEscrow: boolean;
 	productId: string | null;
 	entityId: string | null;
 	name: string | null;

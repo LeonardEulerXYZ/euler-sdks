@@ -217,7 +217,7 @@ const normalizeMetadata = (
 		}
 		if (
 			vault.vaultType !== "earn" &&
-			vault.vaultType !== "escrow" &&
+			!vault.isEscrow &&
 			hasPublishedVaultLabelContent(vault)
 		) {
 			products[standaloneProductKey(vault.address)] =
@@ -275,7 +275,7 @@ const normalizeMetadata = (
 			if (vault.portfolioNotice) {
 				earnVaultNotices[lower] = vault.portfolioNotice;
 			}
-		} else if (vault.vaultType !== "escrow") {
+		} else if (!vault.isEscrow) {
 			candidateVaultAddresses.push(address);
 		}
 
