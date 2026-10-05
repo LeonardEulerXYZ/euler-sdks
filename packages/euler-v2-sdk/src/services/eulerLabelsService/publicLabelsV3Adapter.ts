@@ -10,6 +10,7 @@ import {
 	type PublicLabelsQuery,
 	type PublicLabelsRequest,
 	type PublicLabelsResponse,
+	type PublicLabelsListResponse,
 	type PublicLabelsSnapshot,
 	type PublicLabelsSource,
 	type PublicLabelsMetadata,
@@ -22,7 +23,10 @@ import {
 } from "./publicLabelsV3Types.js";
 
 const MAX_PUBLIC_LABEL_RECORDS = 10_000;
+const MAX_GEO_POLICY_REGEX_LENGTH = 512;
 const PUBLIC_LABELS_REQUEST_CONCURRENCY = 8;
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+const COUNTRY_CODE_RE = /^[A-Z]{2}$/;
 const PUBLIC_VAULT_TYPES: readonly string[] = ["evk", "earn", "securitize"];
 const VISIBILITY_STATUSES: readonly string[] = [
 	"visible",
@@ -30,7 +34,6 @@ const VISIBILITY_STATUSES: readonly string[] = [
 	"hidden",
 	"pending_review",
 ];
-const VERSION_KEY_RE = /^v[0-9]{17}$/;
 const isPublishedVersionKey = (value: string): boolean =>
 	/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(value) &&
 	!["draft", "current", "latest", "production"].includes(value);
@@ -38,10 +41,16 @@ const isPublishedVersionKey = (value: string): boolean =>
 const isNonNegativeInteger = (value: unknown): value is number =>
 	typeof value === "number" && Number.isInteger(value) && value >= 0;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isStringList = (value: unknown): value is string[] =>
+	Array.isArray(value) && value.every((item) => typeof item === "string");
+
 const assertListResponse = <T>(
 	response: PublicLabelsResponse<T[]>,
 	path: string,
-): { items: T[]; total: number } => {
+): PublicLabelsListResponse<T> => {
 	if (!response || !Array.isArray(response.data)) {
 		throw new Error(`Invalid Public Labels response for ${path}`);
 	}
@@ -49,7 +58,7 @@ const assertListResponse = <T>(
 	if (!isNonNegativeInteger(total) || total > MAX_PUBLIC_LABEL_RECORDS) {
 		throw new Error(`Invalid Public Labels total for ${path}`);
 	}
-	return { items: response.data, total };
+	return { data: response.data, meta: { ...response.meta, total } };
 };
 
 const assertItemResponse = <T>(
@@ -77,7 +86,10 @@ export const fetchAllPublicLabelPages = async <T>(
 			limit: PUBLIC_LABELS_PAGE_SIZE,
 			offset,
 		});
-		const { items, total } = assertListResponse(response, path);
+		const {
+			data: items,
+			meta: { total },
+		} = assertListResponse(response, path);
 		if (expectedTotal !== undefined && total !== expectedTotal)
 			throw new Error(
 				`Public Labels collection changed during pagination for ${path}`,
@@ -98,64 +110,89 @@ export const fetchAllPublicLabelPages = async <T>(
 	}
 };
 
+const isNullOrAddress = (value: unknown): value is string | null =>
+	value === null || (typeof value === "string" && ADDRESS_RE.test(value));
+
+const isOptionalStringList = (
+	value: unknown,
+): value is string[] | null | undefined => value == null || isStringList(value);
+
+const isOptionalRegexSource = (
+	value: unknown,
+): value is string | null | undefined => {
+	if (value == null) return true;
+	if (typeof value !== "string" || value.length > MAX_GEO_POLICY_REGEX_LENGTH)
+		return false;
+	new RegExp(value, "i");
+	return true;
+};
+
+const validatePublicGeoPolicy = (row: unknown): PublicGeoPolicy => {
+	if (!isRecord(row)) throw new Error("Invalid geo policy row");
+	const { id, chainId, productId, countriesResolved, policyType } = row;
+	if (
+		typeof id !== "string" ||
+		(policyType !== "block" && policyType !== "restrict") ||
+		!(
+			chainId === null ||
+			(typeof chainId === "number" && Number.isInteger(chainId) && chainId > 0)
+		) ||
+		!(
+			productId === null ||
+			(typeof productId === "string" && productId.length > 0)
+		) ||
+		!isStringList(countriesResolved) ||
+		!countriesResolved.every((code) => COUNTRY_CODE_RE.test(code))
+	)
+		throw new Error("Invalid geo policy scope or countriesResolved");
+	const { vaultAddress, assetAddress } = row;
+	if (!isNullOrAddress(vaultAddress) || !isNullOrAddress(assetAddress))
+		throw new Error("Invalid geo policy address");
+	if (chainId === null && (productId || vaultAddress || assetAddress))
+		throw new Error("Geo policy address/product requires a chain");
+	const { countries, reason, createdAt } = row;
+	if (
+		!isStringList(countries) ||
+		!(reason === null || typeof reason === "string") ||
+		typeof createdAt !== "string"
+	)
+		throw new Error("Invalid geo policy row");
+	const { assetSymbols, assetNames, assetSymbolRegex, assetNameRegex } = row;
+	if (!isOptionalStringList(assetSymbols) || !isOptionalStringList(assetNames))
+		throw new Error("Invalid geo policy asset selector");
+	if (
+		!isOptionalRegexSource(assetSymbolRegex) ||
+		!isOptionalRegexSource(assetNameRegex)
+	)
+		throw new Error("Invalid geo policy regex");
+	return {
+		id,
+		chainId,
+		productId,
+		vaultAddress,
+		assetAddress,
+		countries,
+		countriesResolved,
+		policyType,
+		reason,
+		createdAt,
+		...(assetSymbols !== undefined && { assetSymbols }),
+		...(assetSymbolRegex !== undefined && { assetSymbolRegex }),
+		...(assetNames !== undefined && { assetNames }),
+		...(assetNameRegex !== undefined && { assetNameRegex }),
+	};
+};
+
 /** Validate before caching: unavailable or malformed policy data is never an empty policy. */
 export const validatePublicGeoPolicies = (
 	value: unknown,
 ): PublicGeoPolicy[] => {
 	if (!Array.isArray(value)) throw new Error("Invalid geo policies");
-	const ids = new Set<string>();
-	for (const row of value) {
-		if (
-			!row ||
-			typeof row.id !== "string" ||
-			ids.has(row.id) ||
-			!["block", "restrict"].includes(row.policyType) ||
-			!(
-				row.chainId === null ||
-				(Number.isInteger(row.chainId) && row.chainId > 0)
-			) ||
-			!(
-				row.productId === null ||
-				(typeof row.productId === "string" && row.productId.length > 0)
-			) ||
-			!Array.isArray(row.countriesResolved) ||
-			!row.countriesResolved.every(
-				(code: unknown) => typeof code === "string" && /^[A-Z]{2}$/.test(code),
-			)
-		) {
-			throw new Error("Invalid geo policy scope or countriesResolved");
-		}
-		ids.add(row.id);
-		for (const field of ["vaultAddress", "assetAddress"] as const) {
-			if (
-				row[field] !== null &&
-				(typeof row[field] !== "string" ||
-					!/^0x[0-9a-fA-F]{40}$/.test(row[field]))
-			)
-				throw new Error("Invalid geo policy address");
-		}
-		if (
-			row.chainId === null &&
-			(row.productId || row.vaultAddress || row.assetAddress)
-		)
-			throw new Error("Geo policy address/product requires a chain");
-		for (const field of ["assetSymbols", "assetNames"] as const) {
-			if (
-				row[field] != null &&
-				(!Array.isArray(row[field]) ||
-					!row[field].every((item: unknown) => typeof item === "string"))
-			)
-				throw new Error("Invalid geo policy asset selector");
-		}
-		for (const field of ["assetSymbolRegex", "assetNameRegex"] as const) {
-			if (row[field] != null) {
-				if (typeof row[field] !== "string" || row[field].length > 512)
-					throw new Error("Invalid geo policy regex");
-				new RegExp(row[field], "i");
-			}
-		}
-	}
-	return value as PublicGeoPolicy[];
+	const rows: unknown[] = value;
+	const policies = rows.map(validatePublicGeoPolicy);
+	if (new Set(policies.map((policy) => policy.id)).size !== policies.length)
+		throw new Error("Duplicate geo policy id");
+	return policies;
 };
 
 /** Live policies are deliberately independent of metadata publications and chains. */
@@ -214,7 +251,6 @@ export const resolvePublicLabelsVersion = async (
 	) {
 		throw new Error(`Invalid Public Labels version ${requestedVersion}`);
 	}
-	if (VERSION_KEY_RE.test(requestedVersion)) return requestedVersion;
 
 	const response = await request<PublishedLabelVersion[]>(
 		`/labels/sets/${labelSet}/versions`,
@@ -241,6 +277,36 @@ export const resolvePublicLabelsVersion = async (
 	return published.versionKey;
 };
 
+type DirectVisibilityRow = {
+	chainId: number;
+	vaultAddress: string;
+	status: PublicVaultVisibility["status"];
+	checks: Record<string, unknown>;
+};
+
+type ListingSides = { lend: { hidden: boolean }; borrow: { hidden: boolean } };
+
+const isHiddenFlag = (value: unknown): value is { hidden: boolean } =>
+	isRecord(value) && typeof value.hidden === "boolean";
+
+const isListingSides = (value: unknown): value is ListingSides =>
+	isRecord(value) && isHiddenFlag(value.lend) && isHiddenFlag(value.borrow);
+
+const assertDirectVisibilityRow = (
+	row: DirectVisibilityRow,
+	chainId: number,
+	vault: PublicVaultLabel,
+): void => {
+	if (
+		row.chainId !== chainId ||
+		typeof row.vaultAddress !== "string" ||
+		row.vaultAddress.toLowerCase() !== vault.address.toLowerCase() ||
+		!VISIBILITY_STATUSES.includes(row.status) ||
+		!isRecord(row.checks)
+	)
+		throw new Error("Invalid direct visibility verdict");
+};
+
 /** Reduces the evaluated verdict to the same summary v3 attaches with include=visibility. */
 const fetchDirectVisibility = async (
 	request: PublicLabelsRequest,
@@ -249,48 +315,25 @@ const fetchDirectVisibility = async (
 ): Promise<PublicVaultVisibility> => {
 	const path = `/${vault.vaultType === "earn" ? "earn" : "evk"}/vaults/${chainId}/${vault.address.toLowerCase()}/visibility`;
 	const row = assertItemResponse(
-		await request<{
-			chainId: number;
-			vaultAddress: string;
-			status: PublicVaultVisibility["status"];
-			checks: Record<string, unknown>;
-		}>(path, {}),
+		await request<DirectVisibilityRow>(path, {}),
 		path,
 	);
-	if (
-		row.chainId !== chainId ||
-		typeof row.vaultAddress !== "string" ||
-		row.vaultAddress.toLowerCase() !== vault.address.toLowerCase() ||
-		!["visible", "warning", "hidden", "pending_review"].includes(row.status) ||
-		!row.checks ||
-		typeof row.checks !== "object" ||
-		Array.isArray(row.checks)
-	)
-		throw new Error("Invalid direct visibility verdict");
-	const checks = row.checks;
-	const listing = checks.listing as
-		| Record<string, { hidden?: unknown }>
-		| undefined;
-	if (
-		listing !== undefined &&
-		(!listing ||
-			typeof listing.lend?.hidden !== "boolean" ||
-			typeof listing.borrow?.hidden !== "boolean")
-	)
+	assertDirectVisibilityRow(row, chainId, vault);
+	const { checks } = row;
+	const listing = checks.listing;
+	if (listing !== undefined && !isListingSides(listing))
 		throw new Error("Invalid direct visibility listing");
 	const eligible = row.status === "visible" || row.status === "warning";
+	const hidden = (side: "lend" | "borrow"): boolean =>
+		listing
+			? listing[side].hidden
+			: checks.notExplorable === true ||
+				checks[side === "lend" ? "notExplorableLend" : "notExplorableBorrow"] ===
+					true;
 	return {
 		status: row.status,
-		explorableLend:
-			eligible &&
-			!(listing
-				? listing.lend!.hidden
-				: checks.notExplorable === true || checks.notExplorableLend === true),
-		explorableBorrow:
-			eligible &&
-			!(listing
-				? listing.borrow!.hidden
-				: checks.notExplorable === true || checks.notExplorableBorrow === true),
+		explorableLend: eligible && !hidden("lend"),
+		explorableBorrow: eligible && !hidden("borrow"),
 		decidedBy:
 			typeof checks.decidedBy === "string"
 				? checks.decidedBy
@@ -328,7 +371,7 @@ const fetchEntityDetails = async (
 				addresses.some(
 					(row) =>
 						row.entityId !== entityId ||
-						!/^0x[0-9a-fA-F]{40}$/.test(row.address),
+						!ADDRESS_RE.test(row.address),
 				)
 			)
 				throw new Error(
@@ -380,7 +423,7 @@ const assertResolvedVaultRows = (
 	for (const row of vaults) {
 		if (
 			row.chainId !== chainId ||
-			!/^0x[0-9a-fA-F]{40}$/.test(row.address) ||
+			!ADDRESS_RE.test(row.address) ||
 			!PUBLIC_VAULT_TYPES.includes(row.vaultType) ||
 			typeof row.isEscrow !== "boolean" ||
 			typeof row.deprecated !== "boolean" ||
@@ -457,9 +500,6 @@ export const fetchPublicLabelsMetadata = (
 		labelSet,
 		{},
 	);
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isVisibilitySummary = (
 	value: Record<string, unknown>,

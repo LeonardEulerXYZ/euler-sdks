@@ -211,10 +211,13 @@ describe("PublicLabelsV3Adapter", () => {
 	it("uses the configured publication by default and permits an explicit override", async () => {
 		const request = fixtureRequest();
 		const adapter = new PublicLabelsV3Adapter({ endpoint: "https://v3.test", version: PUBLIC_LABELS_FIXTURE_VERSION, request });
-		await adapter.fetchPublicLabelsSnapshot(1);
-		expect(request.mock.calls.some(([path]) => path.includes("/sets/"))).toBe(false);
-		await adapter.fetchPublicLabelsSnapshot(1, "latest");
-		expect(request).toHaveBeenCalledWith("/labels/sets/public/versions", {});
+		const pinned = await adapter.fetchPublicLabelsSnapshot(1);
+		expect(pinned.version).toBe(PUBLIC_LABELS_FIXTURE_VERSION);
+		expect(request).toHaveBeenCalledWith("/labels/vaults", expect.objectContaining({ version: PUBLIC_LABELS_FIXTURE_VERSION }));
+		expect(request.mock.calls.filter(([path]) => path === "/labels/sets/public/versions")).toHaveLength(1);
+		const latest = await adapter.fetchPublicLabelsSnapshot(1, "latest");
+		expect(latest.version).toBe(PUBLIC_LABELS_FIXTURE_VERSION);
+		expect(request.mock.calls.filter(([path]) => path === "/labels/sets/public/versions")).toHaveLength(2);
 	});
 
 	it("does not fall back to public when the selected set has no publication", async () => {
@@ -232,20 +235,27 @@ describe("PublicLabelsV3Adapter", () => {
 		expect(() => new PublicLabelsV3Adapter({ endpoint: "https://v3.test", version })).toThrow("Invalid Public Labels version");
 	});
 
-	it("uses deterministic publication keys without resolving latest", async () => {
+	it("confirms a concrete publication key in the selected set before reading labels", async () => {
 		const request = fixtureRequest();
 		const adapter = new PublicLabelsV3Adapter({
 			endpoint: "https://v3.example.test/v3",
 			request,
 		});
 
-		await adapter.fetchPublicLabelsSnapshot(1, PUBLIC_LABELS_FIXTURE_VERSION);
+		const snapshot = await adapter.fetchPublicLabelsSnapshot(1, PUBLIC_LABELS_FIXTURE_VERSION);
 
-		expect(
-			request.mock.calls.some(
-				([path]) => path === "/labels/sets/public/versions",
-			),
-		).toBe(false);
+		expect(snapshot.version).toBe(PUBLIC_LABELS_FIXTURE_VERSION);
+		expect(request.mock.calls[0]).toEqual(["/labels/sets/public/versions", {}]);
+	});
+
+	it.each(["v20260101000000000", "test-2026-06-30"])("refuses the unpublished key %s without reading labels", async (version) => {
+		const request = fixtureRequest();
+		const adapter = new PublicLabelsV3Adapter({ endpoint: "https://v3.test", request });
+
+		await expect(adapter.fetchPublicLabelsSnapshot(1, version)).rejects.toThrow(
+			`Public Labels publication ${version} is unavailable`,
+		);
+		expect(request.mock.calls.some(([path]) => path.startsWith("/labels/vaults"))).toBe(false);
 	});
 
 	it("follows list pagination through meta.total", async () => {
@@ -547,6 +557,23 @@ describe("live geo policy transport", () => {
       expect(() => validatePublicGeoPolicies([{ ...publicLabelsFixture.geoPolicies[0], ...patch }])).toThrow();
     }
   });
+  it("returns validated copies rather than the caller's rows", () => {
+    const rows = structuredClone(publicLabelsFixture.geoPolicies);
+    const validated = validatePublicGeoPolicies(rows);
+    expect(validated).toEqual(publicLabelsFixture.geoPolicies);
+    expect(validated).not.toBe(rows);
+    expect(validated[0]).not.toBe(rows[0]);
+  });
+  it.each([
+    [[publicLabelsFixture.geoPolicies[0], publicLabelsFixture.geoPolicies[0]], "Duplicate geo policy id"],
+    [["not-a-row"], "Invalid geo policy row"],
+    [[{ ...publicLabelsFixture.geoPolicies[0], countries: "DE" }], "Invalid geo policy row"],
+    [[{ ...publicLabelsFixture.geoPolicies[0], vaultAddress: "0x12" }], "Invalid geo policy address"],
+    [[{ ...publicLabelsFixture.geoPolicies[0], assetSymbols: [1] }], "Invalid geo policy asset selector"],
+    [[{ ...publicLabelsFixture.geoPolicies[0], assetSymbolRegex: "x".repeat(513) }], "Invalid geo policy regex"],
+  ])("rejects %j with %s", (rows, message) => {
+    expect(() => validatePublicGeoPolicies(rows)).toThrow(message);
+  });
   it("reads all chains without a metadata version selector", async () => {
     const request = vi.fn(async () => response([], 0)) as PublicLabelsRequest;
     expect(await fetchPublicGeoPolicies(request)).toEqual([]);
@@ -666,6 +693,17 @@ describe("metadata-only discovery flags", () => {
     expect(data.verifiedVaultAddresses).toEqual([]);
     expect(data).not.toHaveProperty("visibility");
     expect(normalizePublicLabelsData(1, source).products["kpk-securitize"]!.notExplorable).toBeUndefined();
+  });
+  it("leaves the source and the assessed normalization untouched", () => {
+    const source = structuredClone(publicLabelsFixture);
+    source.products[0]!.notExplorable = true;
+    const before = structuredClone(source);
+    const assessed = normalizePublicLabelsData(1, source);
+    const metadata = normalizePublicLabelsMetadata(1, source);
+    expect(source).toEqual(before);
+    expect(metadata.products["kpk-securitize"]!.notExplorable).toBe(true);
+    expect(assessed.products["kpk-securitize"]!.notExplorable).toBeUndefined();
+    expect(assessed.products["kpk-securitize"]!.vaultOverrides![getAddress(KPK_VAULT)]).not.toHaveProperty("notExplorableLend");
   });
   it.each([true, false])("maps Earn lend hiding=%s separately from deprecation", (hidden) => {
     const source = structuredClone(publicLabelsFixture);

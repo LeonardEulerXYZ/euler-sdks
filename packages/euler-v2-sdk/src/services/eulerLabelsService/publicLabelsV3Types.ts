@@ -10,9 +10,18 @@ export interface PublicLabelsMeta {
 	timestamp: string;
 }
 
+/** What a list endpoint answers once its total has been checked; item endpoints carry no total. */
+export interface PublicLabelsListMeta extends PublicLabelsMeta {
+	total: number;
+}
+
 export interface PublicLabelsResponse<T> {
 	data: T;
 	meta: PublicLabelsMeta;
+}
+
+export interface PublicLabelsListResponse<T> extends PublicLabelsResponse<T[]> {
+	meta: PublicLabelsListMeta;
 }
 
 export interface PublicVaultCampaign {

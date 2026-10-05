@@ -299,30 +299,73 @@ const normalizeMetadata = (
 	};
 };
 
+const withListingFlags = (
+	product: EulerLabelProduct,
+	hidden: boolean | undefined,
+	vaultsByAddress: Map<string, PublicVaultLabel>,
+): EulerLabelProduct => ({
+	...product,
+	...(hidden !== undefined && { notExplorable: hidden }),
+	vaultOverrides: Object.fromEntries(
+		Object.entries(product.vaultOverrides ?? {}).map(([address, override]) => {
+			const vault = vaultsByAddress.get(address);
+			return [
+				address,
+				vault
+					? {
+							...override,
+							notExplorableLend: vault.notExplorableLend === true,
+							notExplorableBorrow: vault.notExplorableBorrow === true,
+						}
+					: override,
+			];
+		}),
+	),
+});
+
 /** Raw published listing flags apply only to the metadata-only path. */
 export const normalizePublicLabelsMetadata = (
 	chainId: number,
 	source: PublicLabelsMetadata,
 ): PublicLabelsMetadataData => {
 	const data = normalizeMetadata(chainId, source);
-	for (const product of source.products.filter((row) => row.chainId === chainId)) {
-		data.products[product.id]!.notExplorable = product.notExplorable === true;
-	}
-	for (const vault of source.vaults.filter((row) => row.chainId === chainId)) {
-		const address = getAddress(vault.address);
-		const product = data.products[vault.productId ?? standaloneProductKey(address)];
-		const override = product?.vaultOverrides?.[address];
-		if (override) {
-			override.notExplorableLend = vault.notExplorableLend === true;
-			override.notExplorableBorrow = vault.notExplorableBorrow === true;
-		}
-		if (vault.vaultType === "earn") {
-			const entry = data.earnVaultEntries[address.toLowerCase()]!;
-			entry.notExplorable = product?.notExplorable === true || vault.notExplorableLend === true;
-			if (entry.notExplorable) data.notExplorableEarnVaults.add(address.toLowerCase());
-		}
-	}
-	return data;
+	const chainVaults = source.vaults.filter((row) => row.chainId === chainId);
+	const productHidden = new Map(
+		source.products
+			.filter((row) => row.chainId === chainId)
+			.map((product) => [product.id, product.notExplorable === true]),
+	);
+	const vaultsByAddress = new Map(
+		chainVaults.map((vault) => [getAddress(vault.address), vault]),
+	);
+	const earnHidden = new Map(
+		chainVaults
+			.filter((vault) => vault.vaultType === "earn")
+			.map((vault) => [
+				vault.address.toLowerCase(),
+				(vault.productId !== null &&
+					productHidden.get(vault.productId) === true) ||
+					vault.notExplorableLend === true,
+			]),
+	);
+	return {
+		...data,
+		products: Object.fromEntries(
+			Object.entries(data.products).map(([id, product]) => [
+				id,
+				withListingFlags(product, productHidden.get(id), vaultsByAddress),
+			]),
+		),
+		earnVaultEntries: Object.fromEntries(
+			Object.entries(data.earnVaultEntries).map(([lower, entry]) => [
+				lower,
+				{ ...entry, notExplorable: earnHidden.get(lower) === true },
+			]),
+		),
+		notExplorableEarnVaults: new Set(
+			[...earnHidden].filter(([, hidden]) => hidden).map(([lower]) => lower),
+		),
+	};
 };
 
 /** Assessed membership is separate from shared display metadata. */
