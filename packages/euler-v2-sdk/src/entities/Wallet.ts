@@ -6,12 +6,20 @@ export interface IWallet {
 	assets: WalletAsset[];
 }
 
+export type AssetAllowanceRead =
+	| "assetForVault"
+	| "assetForPermit2"
+	| "assetForVaultInPermit2";
+
 export interface AssetAllowances {
 	assetForVault: bigint;
 	assetForPermit2: bigint;
 	assetForVaultInPermit2: bigint;
 	permit2ExpirationTime: number;
 	permit2Nonce: number;
+	// Each listed read failed on chain; its value is the 0 fallback, not a confirmed zero
+	// (the Permit2 read also carries permit2ExpirationTime and permit2Nonce).
+	failedReads?: readonly AssetAllowanceRead[];
 }
 
 export interface WalletAsset {

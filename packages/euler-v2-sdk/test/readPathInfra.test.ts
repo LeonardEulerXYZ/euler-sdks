@@ -528,6 +528,24 @@ test("deployment, provider, abi, tokenlist, intrinsic apy, wallet, and labels se
     0n,
   );
   assert.ok(fetchedWallet.errors.length >= 3);
+  const unreadableAllowances = fetchedWallet.result?.assets.find(
+    (asset) => asset.asset === collateralVault.asset.address,
+  )?.allowances[getAddress(plainVault.address)];
+  assert.deepEqual(unreadableAllowances?.failedReads, [
+    "assetForVault",
+    "assetForVaultInPermit2",
+  ]);
+  assert.equal(unreadableAllowances?.assetForVault, 0n);
+  assert.equal(unreadableAllowances?.assetForPermit2, 456n);
+  assert.ok(
+    fetchedWallet.errors.some((issue) => issue.source === "permit2.allowance"),
+  );
+  assert.equal(
+    fetchedWallet.result?.assets.find(
+      (asset) => asset.asset === plainVault.asset.address,
+    )?.allowances[getAddress(plainVault.address)]?.failedReads,
+    undefined,
+  );
 
   const walletService = new WalletService({
     async fetchWallet() {

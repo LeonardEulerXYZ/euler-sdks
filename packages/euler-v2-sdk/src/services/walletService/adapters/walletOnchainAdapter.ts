@@ -3,9 +3,10 @@ import type { ProviderService } from "../../providerService/index.js";
 import type { DeploymentService } from "../../deploymentService/index.js";
 import { type Address, getAddress, erc20Abi, zeroAddress } from "viem";
 import type {
+	AssetAllowanceRead,
+	AssetAllowances,
 	IWallet,
 	WalletAsset,
-	AssetAllowances,
 } from "../../../entities/Wallet.js";
 import {
 	type BuildQueryFn,
@@ -590,12 +591,22 @@ export class WalletOnchainAdapter implements IWalletAdapter {
 						},
 					);
 
+					const failedReads: AssetAllowanceRead[] = [
+						...(result.assetForVault.failed ? (["assetForVault"] as const) : []),
+						...(result.assetForPermit2.failed
+							? (["assetForPermit2"] as const)
+							: []),
+						...(result.permit2Allowance.failed
+							? (["assetForVaultInPermit2"] as const)
+							: []),
+					];
 					allowances[getAddress(spender)] = {
 						assetForVault,
 						assetForPermit2,
 						assetForVaultInPermit2,
 						permit2ExpirationTime,
 						permit2Nonce,
+						...(failedReads.length > 0 ? { failedReads } : {}),
 					};
 				}
 

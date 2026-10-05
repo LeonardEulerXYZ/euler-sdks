@@ -1972,6 +1972,76 @@ test("resolveRequiredApprovalsWithWallet compares a deposit-all amount against t
 	]);
 });
 
+test("resolveRequiredApprovalsWithWallet keeps the Permit2 approval when a Permit2 allowance read failed", () => {
+	const service = createExecutionService();
+	const approval = { token: TOKEN_IN, spender: VAULT_IN, amount: AMOUNT };
+	const coveringAllowances = {
+		assetForPermit2: maxUint256,
+		assetForVaultInPermit2: maxUint160,
+		permit2ExpirationTime: nowInSeconds() + 3600,
+	};
+
+	const unreadableSpenderPermit = resolveSingleApproval(
+		service,
+		approval,
+		createWalletWithAllowances(VAULT_IN, {
+			...coveringAllowances,
+			failedReads: ["assetForVaultInPermit2"],
+		}),
+	);
+	const unreadablePermit2Allowance = resolveSingleApproval(
+		service,
+		approval,
+		createWalletWithAllowances(VAULT_IN, {
+			...coveringAllowances,
+			failedReads: ["assetForPermit2"],
+		}),
+	);
+
+	assert.deepEqual(unreadableSpenderPermit.map(describeResolvedApproval), [
+		{ type: "permit2", spender: VAULT_IN, amount: AMOUNT },
+	]);
+	assert.deepEqual(unreadablePermit2Allowance.map(describeResolvedApproval), [
+		{ type: "approve", args: [PERMIT2, maxUint256] },
+		{ type: "permit2", spender: VAULT_IN, amount: AMOUNT },
+	]);
+});
+
+test("resolveRequiredApprovalsWithWallet resets a reset-requiring token whose allowance read failed", () => {
+	const service = createExecutionService();
+	const approval = { token: MAINNET_USDT, spender: VAULT_IN, amount: AMOUNT };
+
+	const direct = resolveSingleApproval(
+		service,
+		approval,
+		createWalletWithAllowances(
+			VAULT_IN,
+			{ failedReads: ["assetForVault"] },
+			MAINNET_USDT,
+		),
+		{ usePermit2: false },
+	);
+	const viaPermit2 = resolveSingleApproval(
+		service,
+		approval,
+		createWalletWithAllowances(
+			VAULT_IN,
+			{ failedReads: ["assetForPermit2"] },
+			MAINNET_USDT,
+		),
+	);
+
+	assert.deepEqual(direct.map(describeResolvedApproval), [
+		{ type: "approve", args: [VAULT_IN, 0n] },
+		{ type: "approve", args: [VAULT_IN, AMOUNT] },
+	]);
+	assert.deepEqual(viaPermit2.map(describeResolvedApproval), [
+		{ type: "approve", args: [PERMIT2, 0n] },
+		{ type: "approve", args: [PERMIT2, maxUint256] },
+		{ type: "permit2", spender: VAULT_IN, amount: AMOUNT },
+	]);
+});
+
 test("getPermit2TypedData defaults Permit2 expiration to the signature window", () => {
 	const service = createExecutionService();
 	const before = BigInt(Math.floor(Date.now() / 1000)) + 60n * 60n;
