@@ -103,7 +103,7 @@ All docs are in [`./docs`](./docs).
 22. [Account Computed Properties](./docs/account-computed-properties.md) - Health factor/LTV/net-value computed fields and data prerequisites.
 23. [Caching External Data Queries](./docs/caching-external-data-queries.md) - `query*` decoration pattern for caching/logging/profiling.
 24. [Plugins](./docs/plugins.md) - Plugin system for read-path and plan-path extensions.
-25. [Labels](./docs/labels.md) - Label metadata model and usage.
+25. [Labels and vault assessments](./docs/labels.md) - Published metadata, visibility and raw assessment reads.
 26. [Decoding Smart Contract Errors](./docs/decode-smart-contract-errors.md) - Revert decoding utilities for better error handling.
 27. [Entity Diagnostics](./docs/entity-diagnostics.md) - Sidecar metadata for data normalization, fallbacks, and per-field warnings.
 

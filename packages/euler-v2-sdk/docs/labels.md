@@ -131,3 +131,20 @@ Applications with a durable geo cache can pass its validated policies as the thi
 
 
 `normalizeEulerLabelsFileData(files)` derives the same `EulerLabelsData` shape from an already-fetched `{entities, products, points, earnVaults, assets}` file collection. Application-owned static loaders can require every document to succeed before invoking it and provide their own durable checkpoint. It performs no network reads; V3 adapters remain independent of file authoring.
+
+## Vault assessments
+
+`sdk.vaultAssessmentService.fetchVaultAssessment(chainId, vaultAddress, family)` reads the raw EVK or Earn assessment from `/v3/{evk|earn}/vaults/{chainId}/{address}/assessment`. The service also has a root export, `VaultAssessmentService`, for applications that construct it separately. `family` is `evk` or `earn`.
+
+```typescript
+const assessment = await sdk.vaultAssessmentService.fetchVaultAssessment(
+  chainId,
+  vaultAddress,
+  'evk',
+)
+// assessment is undefined when V3 has no assessment for this vault.
+```
+
+The parsed result contains `configStatus`, `checksStatus`, configuration and consistency findings, timestamps and `assessed`. Findings retain V3's `outcome` (`pass`, `fail`, `unknown` or `not_applicable`), `description`, optional `cause`, and optional `exempted` marker. An exempted failure is still a failure in the raw result; the application decides how to present accepted exceptions. Assessments are separate from the effective visibility verdict and do not establish verified membership or an overall risk rating.
+
+Results are cached for five minutes by default; pass `{ fresh: true }` to request the endpoint again. A normal 404 returns `undefined`. A V3 `CHAIN_NOT_SUPPORTED` response throws `VaultAssessmentUnavailableError` with reason `chain-not-supported`, and an SDK built with `disableV3: true` throws the same typed error with reason `v3-disabled`. Applications can check either case with `isVaultAssessmentUnavailableError(error, reason)`. Other request or validation failures throw normally. Freshness policy, retries and UI wording belong to the application.
