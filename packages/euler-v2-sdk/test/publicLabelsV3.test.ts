@@ -1,6 +1,6 @@
 import { PublicLabelsV3MetadataAdapter, normalizePublicLabelsMetadata } from "../src/index.js";
 import { getAddress } from "viem";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	PublicLabelsV3Adapter,
 	fetchPublicGeoPolicies,
@@ -324,6 +324,45 @@ describe("PublicLabelsV3Adapter", () => {
 		).rejects.toThrow("Invalid resolved vault labels");
 	});
 
+	it("rejects a stalled pagination instead of looping", async () => {
+		const request = vi
+			.fn()
+			.mockResolvedValue(response([], 1)) as unknown as PublicLabelsRequest;
+		await expect(
+			fetchAllPublicLabelPages(request, "/labels/products", {}),
+		).rejects.toThrow("pagination stalled");
+		expect(request).toHaveBeenCalledTimes(1);
+	});
+
+	it("reads a direct verdict only for rows whose attached summary is null", async () => {
+		const request = fixtureRequest();
+		const snapshot = await new PublicLabelsV3Adapter({
+			endpoint: "https://v3.test",
+			request,
+		}).fetchPublicLabelsSnapshot(1);
+
+		const directReads = request.mock.calls
+			.map(([path]) => path)
+			.filter((path) => path.endsWith("/visibility"))
+			.sort();
+		expect(directReads).toEqual(
+			[ASSESSMENT_ONLY_EVK, NEUTRAL_ESCROW]
+				.map((address) => `/evk/vaults/1/${address.toLowerCase()}/visibility`)
+				.sort(),
+		);
+		expect(snapshot.publicLabels.visibility[ASSESSMENT_ONLY_EVK.toLowerCase()]).toEqual({
+			status: "pending_review",
+			explorableLend: false,
+			explorableBorrow: false,
+			decidedBy: "awaiting-verification",
+			reason: null,
+		});
+		expect(snapshot.publicLabels.visibility[KPK_VAULT.toLowerCase()]).toEqual(
+			publicLabelsFixture.visibility[KPK_VAULT.toLowerCase()],
+		);
+		expect(snapshot.publicLabels.vaults.every((vault) => !("visibility" in vault))).toBe(true);
+	});
+
 	it("rejects unsafe entity IDs before constructing profile paths", async () => {
 		const request = fixtureRequest({ productEntityId: "../unsafe" });
 		const adapter = new PublicLabelsV3Adapter({
@@ -360,6 +399,51 @@ describe("normalizePublicLabelsData", () => {
 				?.name,
 		).toBe("KPK VBILL/USDC Lend");
 	});
+	it("verifies an entity-claimed vault without a product through the standalone path", () => {
+		const unlabelled = publicLabelsFixture.vaults.find(
+			(vault) => vault.address === ASSESSMENT_ONLY_EVK,
+		)!;
+		const result = normalizePublicLabelsData(1, {
+			...publicLabelsFixture,
+			vaults: [{ ...unlabelled, entityId: "kpk" }],
+			visibility: {
+				[ASSESSMENT_ONLY_EVK.toLowerCase()]: {
+					status: "visible",
+					explorableLend: true,
+					explorableBorrow: true,
+					decidedBy: "verified",
+					reason: null,
+				},
+			},
+		});
+
+		expect(result.verifiedVaultAddresses).toEqual([getAddress(ASSESSMENT_ONLY_EVK)]);
+		expect(result.managingEntityByVault[ASSESSMENT_ONLY_EVK.toLowerCase()]).toBe("kpk");
+		expect(result.products[`__vault_${ASSESSMENT_ONLY_EVK.toLowerCase()}`]).toMatchObject({
+			isStandalone: true,
+			entity: "kpk",
+			name: "",
+			vaults: [getAddress(ASSESSMENT_ONLY_EVK)],
+		});
+	});
+
+	it("counts a warning verdict decided by unassessable as verified", () => {
+		const result = normalizePublicLabelsData(1, {
+			...publicLabelsFixture,
+			visibility: {
+				[KPK_VAULT.toLowerCase()]: {
+					status: "warning",
+					explorableLend: true,
+					explorableBorrow: true,
+					decidedBy: "unassessable",
+					reason: "No assessment is available for this vault yet",
+				},
+			},
+		});
+
+		expect(result.verifiedVaultAddresses).toEqual([getAddress(KPK_VAULT)]);
+	});
+
 	it("does not infer trusted membership from label content without a verdict", () => {
 		expect(
 			normalizePublicLabelsData(1, { ...publicLabelsFixture, visibility: {} })
@@ -712,4 +796,56 @@ describe("metadata-only discovery flags", () => {
     expect(data.notExplorableEarnVaults.has(KPK_VAULT.toLowerCase())).toBe(hidden);
     expect(data.earnVaults).toEqual([]);
   });
+});
+
+describe("default transport", () => {
+	const fetchMock = vi.fn();
+	const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
+	const headersOf = (call: number) => new Headers(fetchMock.mock.calls[call]![1].headers);
+	beforeEach(() => {
+		fetchMock.mockReset();
+		vi.stubGlobal("fetch", fetchMock);
+	});
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it.each([
+		["https://v3.example.test", "https://v3.example.test/v3/labels/sets/public/versions?limit=100"],
+		["https://v3.example.test/", "https://v3.example.test/v3/labels/sets/public/versions?limit=100"],
+		["https://v3.example.test/v3", "https://v3.example.test/v3/labels/sets/public/versions?limit=100"],
+		["https://v3.example.test/v3/", "https://v3.example.test/v3/labels/sets/public/versions?limit=100"],
+		["https://app.example/api/internal/v3", "https://app.example/api/internal/v3/labels/sets/public/versions?limit=100"],
+	])("requests %s as %s, skipping undefined query values", async (endpoint, expected) => {
+		fetchMock.mockResolvedValue(ok(response([])));
+		const adapter = new PublicLabelsV3Adapter({ endpoint });
+		await adapter.queryPublicLabels("/labels/sets/public/versions", { limit: 100, offset: undefined });
+		expect(String(fetchMock.mock.calls[0]![0])).toBe(expected);
+		expect(headersOf(0).get("accept")).toBe("application/json");
+		expect(headersOf(0).has("x-api-key")).toBe(false);
+	});
+
+	it("sends the trimmed API key and omits a blank one", async () => {
+		fetchMock.mockResolvedValue(ok(response([])));
+		await new PublicLabelsV3Adapter({ endpoint: "https://v3.test", apiKey: "  secret-key " }).queryPublicLabels("/geo-policies", {});
+		expect(headersOf(0).get("x-api-key")).toBe("secret-key");
+		await new PublicLabelsV3Adapter({ endpoint: "https://v3.test", apiKey: "   " }).queryPublicLabels("/geo-policies", {});
+		expect(headersOf(1).has("x-api-key")).toBe(false);
+	});
+
+	it("returns the parsed body of a 2xx answer", async () => {
+		fetchMock.mockResolvedValue(ok(response([1, 2], 2)));
+		await expect(
+			new PublicLabelsV3Adapter({ endpoint: "https://v3.test" }).queryPublicLabels("/geo-policies", {}),
+		).resolves.toEqual(response([1, 2], 2));
+	});
+
+	it("throws on a non-2xx answer instead of parsing it", async () => {
+		const json = vi.fn(async () => response([]));
+		fetchMock.mockResolvedValue({ ok: false, status: 503, json });
+		await expect(
+			new PublicLabelsV3Adapter({ endpoint: "https://v3.test" }).queryPublicLabels("/geo-policies", {}),
+		).rejects.toThrow("Public Labels V3 returned 503 for /geo-policies");
+		expect(json).not.toHaveBeenCalled();
+	});
 });

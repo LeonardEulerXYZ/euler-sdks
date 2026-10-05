@@ -12,6 +12,8 @@ The default `EulerLabelsService` configuration reads the file-based [`euler-labe
 - **Euler Earn entries** &mdash; Earn vault membership, descriptions, notices, block/restricted countries, classification tags, and deprecated/not-explorable flags
 - **Asset rules** &mdash; explicit or pattern-based block/restricted-country rules
 
+The country fields (`block`/`restricted` on products, overrides and Earn entries, `earnVaultBlocks`, `earnVaultRestrictions`, `assetBlocks`, `assetRestrictions`, `assetPatternRules`) are populated only by the file-based dataset. Under the V3 adapters they are always empty and the helpers that read them answer nothing: the bundle carries the live rules as `rawGeoPolicies` and the application evaluates them itself (see [Public Labels V3](#public-labels-v3)).
+
 ## Usage
 
 ```typescript
