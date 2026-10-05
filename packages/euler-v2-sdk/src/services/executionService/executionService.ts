@@ -2072,9 +2072,8 @@ export class ExecutionService<TVaultEntity extends VaultEntity = VaultEntity>
 				const approval = item as RequiredApproval;
 				const { token, owner, spender, amount } = approval;
 
-				// Get wallet asset and allowances for the specific spender
 				const walletAsset = wallet.getAsset(token);
-				const allowances = walletAsset?.allowances[spender];
+				const allowances = walletAsset?.allowances[getAddress(spender)];
 
 				const resolvedItems: (ApproveCall | Permit2DataToSign)[] = [];
 

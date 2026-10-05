@@ -6,8 +6,10 @@ import {
 	encodeFunctionData,
 	erc20Abi,
 	getAddress,
+	maxUint160,
 	maxUint256,
 } from "viem";
+import type { AssetAllowances } from "../src/entities/Wallet.js";
 import { ExecutionService } from "../src/services/executionService/executionService.js";
 import {
 	type CowSwapPlanItem,
@@ -37,6 +39,8 @@ const COLLATERAL_VAULT = "0x0000000000000000000000000000000000000a05" as const;
 const DESTINATION_VAULT = "0x0000000000000000000000000000000000000a06" as const;
 const NEW_LIABILITY_VAULT = "0x0000000000000000000000000000000000000a07" as const;
 const PERMIT2 = "0x0000000000000000000000000000000000000012" as const;
+const LOWERCASE_SPENDER = "0x000000000000000000000000000000000000beef" as const;
+const CHECKSUMMED_SPENDER = getAddress(LOWERCASE_SPENDER);
 const AMOUNT = 12345n;
 
 function createExecutionService() {
@@ -53,6 +57,68 @@ function createExecutionService() {
 		} as never,
 		{} as never,
 	);
+}
+
+function nowInSeconds(): number {
+	return Math.floor(Date.now() / 1000);
+}
+
+function createWalletWithAllowances(
+	spenderKey: `0x${string}`,
+	allowances: Partial<AssetAllowances> = {},
+	token: `0x${string}` = TOKEN_IN,
+) {
+	return {
+		chainId: 1,
+		account: ACCOUNT,
+		getAsset: () => ({
+			account: ACCOUNT,
+			asset: token,
+			balance: AMOUNT,
+			allowances: {
+				[spenderKey]: {
+					assetForVault: 0n,
+					assetForPermit2: 0n,
+					assetForVaultInPermit2: 0n,
+					permit2ExpirationTime: 0,
+					permit2Nonce: 0,
+					...allowances,
+				},
+			},
+		}),
+	} as never;
+}
+
+function resolveSingleApproval(
+	service: ReturnType<typeof createExecutionService>,
+	approval: { token: `0x${string}`; spender: `0x${string}`; amount: bigint },
+	wallet: never,
+	options: { usePermit2?: boolean; unlimitedApproval?: boolean; chainId?: number } = {},
+) {
+	const { chainId = 1, ...rest } = options;
+	const resolved = service.resolveRequiredApprovalsWithWallet({
+		plan: [{ type: "requiredApproval", owner: ACCOUNT, ...approval }],
+		chainId,
+		wallet,
+		...rest,
+	});
+	const item = resolved[0];
+	if (item?.type !== "requiredApproval") {
+		throw new Error("expected requiredApproval");
+	}
+	return item.resolved ?? [];
+}
+
+function describeResolvedApproval(
+	item: ReturnType<typeof resolveSingleApproval>[number],
+) {
+	if (item.type === "approve") {
+		return {
+			type: "approve" as const,
+			args: decodeFunctionData({ abi: erc20Abi, data: item.data }).args,
+		};
+	}
+	return { type: "permit2" as const, spender: item.spender, amount: item.amount };
 }
 
 function createBatchItem(
@@ -1788,6 +1854,61 @@ test("resolveRequiredApprovalsWithWallet skips Permit2 when direct vault allowan
 		throw new Error("expected requiredApproval");
 	}
 	assert.deepEqual(approval.resolved, []);
+});
+
+test("resolveRequiredApprovalsWithWallet finds checksum-keyed allowances for a lowercase plan spender", () => {
+	assert.notEqual(CHECKSUMMED_SPENDER, LOWERCASE_SPENDER);
+	const service = createExecutionService();
+	const wallet = createWalletWithAllowances(CHECKSUMMED_SPENDER, {
+		assetForPermit2: maxUint256,
+		assetForVaultInPermit2: AMOUNT,
+		permit2ExpirationTime: nowInSeconds() + 3600,
+	});
+
+	const resolved = resolveSingleApproval(
+		service,
+		{ token: TOKEN_IN, spender: LOWERCASE_SPENDER, amount: AMOUNT },
+		wallet,
+	);
+
+	assert.deepEqual(resolved, []);
+});
+
+test("resolveRequiredApprovalsWithWallet finds checksum-keyed allowances for a lowercase plan spender in direct mode", () => {
+	const service = createExecutionService();
+	const wallet = createWalletWithAllowances(CHECKSUMMED_SPENDER, {
+		assetForVault: AMOUNT,
+	});
+
+	const resolved = resolveSingleApproval(
+		service,
+		{ token: TOKEN_IN, spender: LOWERCASE_SPENDER, amount: AMOUNT },
+		wallet,
+		{ usePermit2: false },
+	);
+
+	assert.deepEqual(resolved, []);
+});
+
+test("resolveRequiredApprovalsWithWallet still resolves to the approval when the wallet has no entry for the spender", () => {
+	const service = createExecutionService();
+	const wallet = createWalletWithAllowances(VAULT_IN, {
+		assetForVault: maxUint256,
+		assetForPermit2: maxUint256,
+		assetForVaultInPermit2: maxUint160,
+		permit2ExpirationTime: nowInSeconds() + 3600,
+	});
+
+	const resolved = resolveSingleApproval(
+		service,
+		{ token: TOKEN_IN, spender: LOWERCASE_SPENDER, amount: AMOUNT },
+		wallet,
+	);
+
+	assert.deepEqual(resolved.map(describeResolvedApproval), [
+		{ type: "approve", args: [PERMIT2, maxUint256] },
+		{ type: "permit2", spender: LOWERCASE_SPENDER, amount: AMOUNT },
+	]);
 });
 
 test("getPermit2TypedData defaults Permit2 expiration to the signature window", () => {
