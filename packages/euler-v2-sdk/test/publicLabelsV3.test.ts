@@ -44,10 +44,16 @@ const fixtureRequest = (options?: { productEntityId?: string; labelSet?: string 
 				]);
 			}
 			if (path === "/labels/vaults") {
-				return response(
-					publicLabelsFixture.vaults,
-					publicLabelsFixture.vaults.length,
-				);
+				const rows =
+					query.include === "visibility"
+						? publicLabelsFixture.vaults.map((vault) => ({
+								...vault,
+								visibility:
+									publicLabelsFixture.visibility[vault.address.toLowerCase()] ??
+									null,
+							}))
+						: publicLabelsFixture.vaults;
+				return response(rows, rows.length);
 			}
 			if (path === "/labels/products") {
 				const products = options?.productEntityId
@@ -64,14 +70,6 @@ const fixtureRequest = (options?: { productEntityId?: string; labelSet?: string 
 					publicLabelsFixture.entities.length,
 				);
 			}
-			if (path === "/evk/vaults")
-				return response(
-					Object.entries(publicLabelsFixture.visibility).map(
-						([address, visibility]) => ({ chainId: 1, address, visibility }),
-					),
-					1,
-				);
-			if (path === "/earn/vaults") return response([], 0);
 			if (path.endsWith("/visibility")) return response({
 				chainId: 1, vaultAddress: path.split("/")[4],
 				status: "pending_review", checks: { evaluated: false },
@@ -140,6 +138,7 @@ describe("PublicLabelsV3Adapter", () => {
 			chainId: 1,
 			version: PUBLIC_LABELS_FIXTURE_VERSION,
 			view: "resolved",
+			include: "visibility",
 			limit: 100,
 			offset: 0,
 		});
@@ -159,12 +158,23 @@ describe("PublicLabelsV3Adapter", () => {
 			limit: 100,
 			offset: 0,
 		});
-		expect(request).toHaveBeenCalledWith("/evk/vaults", {
-			chainId: 1,
-			visibility: "visible,warning,hidden,pending_review",
-			limit: 100,
-			offset: 0,
-		});
+		expect(
+			request.mock.calls.some(
+				([path]) => path === "/evk/vaults" || path === "/earn/vaults",
+			),
+		).toBe(false);
+		expect(request).toHaveBeenCalledWith(
+			`/evk/vaults/1/${ASSESSMENT_ONLY_EVK.toLowerCase()}/visibility`,
+			{},
+		);
+		expect(request).toHaveBeenCalledWith(
+			`/evk/vaults/1/${NEUTRAL_ESCROW.toLowerCase()}/visibility`,
+			{},
+		);
+		expect(request).not.toHaveBeenCalledWith(
+			`/evk/vaults/1/${KPK_VAULT.toLowerCase()}/visibility`,
+			{},
+		);
 		expect(request).toHaveBeenCalledWith(`/labels/entities/kpk`, {
 			labelSet: "public",
 			version: PUBLIC_LABELS_FIXTURE_VERSION,
@@ -553,7 +563,11 @@ describe("direct visibility coverage", () => {
 	const adapter = (verdict: unknown, fail = false) => {
 		const base = fixtureRequest();
 		const request: PublicLabelsRequest = async <T>(path: string, query: PublicLabelsQuery) => {
-			if (path === "/evk/vaults") return response([], 0) as PublicLabelsResponse<T>;
+			if (path === "/labels/vaults")
+				return response(
+					publicLabelsFixture.vaults.map((vault) => ({ ...vault, visibility: null })),
+					publicLabelsFixture.vaults.length,
+				) as PublicLabelsResponse<T>;
 			if (path === `/evk/vaults/1/${address}/visibility`) {
 				if (fail) throw new Error("upstream unavailable");
 				return response(verdict) as PublicLabelsResponse<T>;
@@ -581,7 +595,7 @@ describe("direct visibility coverage", () => {
 	it("propagates upstream failure instead of caching an incomplete snapshot", async () => {
 		await expect(adapter(direct(), true).fetchPublicLabelsSnapshot(1)).rejects.toThrow("upstream unavailable");
 	});
-	it("does not fetch a direct verdict when the inventory already supplies one", async () => {
+	it("does not fetch a direct verdict when the labels row already carries one", async () => {
 		const request = fixtureRequest();
 		await new PublicLabelsV3Adapter({endpoint: "https://example.com", request}).fetchPublicLabelsSnapshot(1);
 		expect(request.mock.calls.some(([path]) => path === `/evk/vaults/1/${address}/visibility`)).toBe(false);
@@ -600,6 +614,8 @@ describe("direct visibility coverage", () => {
     expect(snapshot.source).toBe("v3-metadata");
     expect(snapshot.version).toBe(PUBLIC_LABELS_FIXTURE_VERSION);
     expect(snapshot.publicLabels).not.toHaveProperty("visibility");
+    expect(transport.mock.calls.every(([, query]) => query.include === undefined)).toBe(true);
+    expect(transport.mock.calls.some(([path]) => path.endsWith("/visibility"))).toBe(false);
     expect(snapshot.publicLabels.entityAddresses).toEqual(publicLabelsFixture.entityAddresses);
     expect(snapshot.publicLabels.geoPolicies).toEqual(publicLabelsFixture.geoPolicies);
     const data = normalizePublicLabelsMetadata(1, snapshot.publicLabels);
@@ -612,7 +628,7 @@ describe("direct visibility coverage", () => {
     expect(transport.mock.calls.filter(([path]) => path.startsWith("/labels/") && !path.endsWith("/versions") && !path.endsWith("/addresses"))
       .every(([, query]) => query.version === PUBLIC_LABELS_FIXTURE_VERSION)).toBe(true);
   });
-  it("does not downgrade the assessed adapter when inventories reject the chain", async () => {
+  it("does not downgrade the assessed adapter when direct verdict reads reject the chain", async () => {
     const transport = fixtureRequest();
     const request: PublicLabelsRequest = (path, query) => {
       if (path.startsWith("/evk/") || path.startsWith("/earn/")) throw new Error("CHAIN_NOT_SUPPORTED");
