@@ -7,6 +7,7 @@ import {
 	validatePublicGeoPolicies,
 	fetchAllPublicLabelPages,
 	getEulerLabelProductBrandEntityKeys,
+	hasPublishedVaultLabelContent,
 	normalizePublicLabelsData,
 	type PublicLabelsQuery,
 	type PublicLabelsRequest,
@@ -422,6 +423,52 @@ describe("normalizePublicLabelsData", () => {
 			"kpk-securitize",
 		]);
 		expect(normalizePublicLabelsMetadata(1, source).candidateVaultAddresses).toEqual([]);
+	});
+
+	describe("standalone grouping", () => {
+		const unlabelled = publicLabelsFixture.vaults.find(
+			(vault) => vault.address === ASSESSMENT_ONLY_EVK,
+		)!;
+		const key = `__vault_${ASSESSMENT_ONLY_EVK.toLowerCase()}`;
+		const normalize = (patch: Partial<typeof unlabelled>) =>
+			normalizePublicLabelsData(1, {
+				...publicLabelsFixture,
+				vaults: [{ ...unlabelled, ...patch }],
+			});
+
+		it.each([
+			{ tags: ["recently added"] },
+			{ deprecated: true, deprecationReason: "Retired" },
+			{ portfolioNotice: "Platform notice" },
+			{ campaigns: [{ name: "Points", logo: null, type: "deposit" as const }] },
+		])("does not create a nameless product from %j", (patch) => {
+			expect(hasPublishedVaultLabelContent({ ...unlabelled, ...patch })).toBe(false);
+			expect(normalize(patch).products).not.toHaveProperty(key);
+		});
+
+		it("still records campaigns as points without a product", () => {
+			const result = normalize({
+				campaigns: [{ name: "Points", logo: null, type: "deposit" as const }],
+			});
+			expect(result.points[getAddress(ASSESSMENT_ONLY_EVK)]).toEqual([
+				{ name: "Points", logo: "", type: "deposit" },
+			]);
+		});
+
+		it.each([
+			{ name: "Named vault" },
+			{ description: "Described vault" },
+			{ entityId: "kpk" },
+		])("groups a vault with %j standalone, tags on its override", (patch) => {
+			const product = normalize({ ...patch, tags: ["recently added"], deprecated: true }).products[key]!;
+			expect(hasPublishedVaultLabelContent({ ...unlabelled, ...patch })).toBe(true);
+			expect(product.isStandalone).toBe(true);
+			expect(product.vaults).toEqual([]);
+			expect(product.deprecatedVaults).toEqual([getAddress(ASSESSMENT_ONLY_EVK)]);
+			expect(product.vaultOverrides?.[getAddress(ASSESSMENT_ONLY_EVK)]?.tags).toEqual([
+				"recently added",
+			]);
+		});
 	});
 
 	it("keeps mixed vault tags scoped to their vault overrides", () => {

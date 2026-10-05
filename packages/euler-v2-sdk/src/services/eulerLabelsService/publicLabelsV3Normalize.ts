@@ -137,22 +137,15 @@ const standaloneProductKey = (address: string): string =>
 	`__vault_${address.toLowerCase()}`;
 
 /**
- * Identifies display content for standalone grouping. This is not a trust
- * decision: trusted membership also requires a live visibility verdict.
+ * Curator-authored identity only: tags, deprecation, notices and campaigns are
+ * annotations on a vault, not a product of their own. This is not a trust
+ * decision: membership also requires a live visibility verdict.
  */
 export const hasPublishedVaultLabelContent = (
 	vault: PublicVaultLabel,
 ): boolean =>
 	Boolean(
-		vault.productId ||
-			vault.entityId ||
-			vault.name ||
-			vault.description ||
-			vault.portfolioNotice ||
-			vault.deprecated ||
-			vault.deprecationReason ||
-			vault.tags.length ||
-			vault.campaigns?.length,
+		vault.productId || vault.entityId || vault.name || vault.description,
 	);
 
 const buildStandaloneProduct = (vault: PublicVaultLabel): EulerLabelProduct => {
