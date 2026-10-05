@@ -1911,6 +1911,67 @@ test("resolveRequiredApprovalsWithWallet still resolves to the approval when the
 	]);
 });
 
+test("resolveRequiredApprovalsWithWallet treats a Permit2 allowance expiring within the margin as expired", () => {
+	const service = createExecutionService();
+	const approval = { token: TOKEN_IN, spender: VAULT_IN, amount: AMOUNT };
+	const permit2Allowances = {
+		assetForPermit2: maxUint256,
+		assetForVaultInPermit2: AMOUNT,
+	};
+
+	const nearExpiry = resolveSingleApproval(
+		service,
+		approval,
+		createWalletWithAllowances(VAULT_IN, {
+			...permit2Allowances,
+			permit2ExpirationTime: nowInSeconds() + 30,
+		}),
+	);
+	const beyondMargin = resolveSingleApproval(
+		service,
+		approval,
+		createWalletWithAllowances(VAULT_IN, {
+			...permit2Allowances,
+			permit2ExpirationTime: nowInSeconds() + 3600,
+		}),
+	);
+
+	assert.deepEqual(nearExpiry.map(describeResolvedApproval), [
+		{ type: "permit2", spender: VAULT_IN, amount: AMOUNT },
+	]);
+	assert.deepEqual(beyondMargin, []);
+});
+
+test("resolveRequiredApprovalsWithWallet compares a deposit-all amount against the uint160 Permit2 cap", () => {
+	const service = createExecutionService();
+	const approval = { token: TOKEN_IN, spender: VAULT_IN, amount: maxUint256 };
+	const expiration = nowInSeconds() + 3600;
+
+	const unlimitedPermit = resolveSingleApproval(
+		service,
+		approval,
+		createWalletWithAllowances(VAULT_IN, {
+			assetForPermit2: maxUint160,
+			assetForVaultInPermit2: maxUint160,
+			permit2ExpirationTime: expiration,
+		}),
+	);
+	const belowCap = resolveSingleApproval(
+		service,
+		approval,
+		createWalletWithAllowances(VAULT_IN, {
+			assetForPermit2: maxUint256,
+			assetForVaultInPermit2: maxUint160 - 1n,
+			permit2ExpirationTime: expiration,
+		}),
+	);
+
+	assert.deepEqual(unlimitedPermit, []);
+	assert.deepEqual(belowCap.map(describeResolvedApproval), [
+		{ type: "permit2", spender: VAULT_IN, amount: maxUint256 },
+	]);
+});
+
 test("getPermit2TypedData defaults Permit2 expiration to the signature window", () => {
 	const service = createExecutionService();
 	const before = BigInt(Math.floor(Date.now() / 1000)) + 60n * 60n;

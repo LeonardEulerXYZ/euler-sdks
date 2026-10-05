@@ -819,6 +819,8 @@ export type PrefetchPlanPlugins = (
 ) => Promise<PluginPrefetchData>;
 
 const WAD = 10n ** 18n;
+// A permit that lapses before the transaction mines reverts on chain, so near-expiry counts as expired.
+const PERMIT2_EXPIRY_MARGIN_SECONDS = 60;
 // TODO explain how this service is coupled to the concrete abis of ERC4626, permit2 and EVK.
 // this is a helper service, not a generic one.
 export class ExecutionService<TVaultEntity extends VaultEntity = VaultEntity>
@@ -2145,19 +2147,20 @@ export class ExecutionService<TVaultEntity extends VaultEntity = VaultEntity>
 						continue;
 					}
 
-					// Check permit2 allowances
 					const assetForPermit2 = allowances.assetForPermit2;
 					const assetForVaultInPermit2 = allowances.assetForVaultInPermit2;
 					const permit2ExpirationTime = allowances.permit2ExpirationTime;
+					// Permit2 moves at most uint160 per transfer; the signed permit is capped to it.
+					const permit2Amount = amount > maxUint160 ? maxUint160 : amount;
 
-					// Check if permit2 signature has expired
 					const currentTime = Math.floor(Date.now() / 1000);
 					const isPermit2Expired =
-						permit2ExpirationTime > 0 && currentTime >= permit2ExpirationTime;
+						permit2ExpirationTime > 0 &&
+						currentTime + PERMIT2_EXPIRY_MARGIN_SECONDS >= permit2ExpirationTime;
 
-					const hasSufficientPermit2Allowance = assetForPermit2 >= amount;
+					const hasSufficientPermit2Allowance = assetForPermit2 >= permit2Amount;
 					const hasSufficientVaultAllowance =
-						assetForVaultInPermit2 >= amount && !isPermit2Expired;
+						assetForVaultInPermit2 >= permit2Amount && !isPermit2Expired;
 
 					// If both are sufficient, no approval needed
 					if (hasSufficientPermit2Allowance && hasSufficientVaultAllowance) {
