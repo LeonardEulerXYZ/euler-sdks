@@ -527,16 +527,23 @@ export class EulerLabelsService implements IEulerLabelsService {
 			}));
 
 			const earnVault = labelsData.earnVaultEntries[addrLower];
+			const vaultAnnotation = labelsData.vaultAnnotations?.[addrLower];
 			const earnDeprecationReason = labelsData.deprecatedEarnVaults[addrLower];
 			const deprecationReason =
-				deprecatedVaultsMap.get(addrLower) ?? earnDeprecationReason;
+				deprecatedVaultsMap.get(addrLower) ??
+				earnDeprecationReason ??
+				(vaultAnnotation?.deprecated
+					? (vaultAnnotation.deprecationReason ?? "")
+					: undefined);
 
 			const hasAnyLabel =
 				products.length > 0 ||
 				entities.length > 0 ||
 				points.length > 0 ||
 				deprecationReason !== undefined ||
-				earnVault !== undefined;
+				earnVault !== undefined ||
+				(vaultAnnotation !== undefined &&
+					Object.keys(vaultAnnotation).length > 0);
 
 			if (hasAnyLabel) {
 				vault.eulerLabel = {
@@ -551,6 +558,9 @@ export class EulerLabelsService implements IEulerLabelsService {
 					...(earnVault?.description && { description: earnVault.description }),
 					...(earnVault?.portfolioNotice && {
 						portfolioNotice: earnVault.portfolioNotice,
+					}),
+					...(vaultAnnotation?.portfolioNotice && {
+						portfolioNotice: vaultAnnotation.portfolioNotice,
 					}),
 					...(earnVault?.notExplorable && { notExplorable: true }),
 					...(earnVault?.block && { block: earnVault.block }),

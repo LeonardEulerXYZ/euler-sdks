@@ -90,6 +90,15 @@ export type EulerLabelEarnVaultEntry = {
 	portfolioNotice?: string;
 	notExplorable?: boolean;
 };
+/** Vault-scoped V3 annotations that do not require a display product. */
+export type EulerLabelVaultAnnotation = {
+	deprecated?: boolean;
+	deprecationReason?: string;
+	portfolioNotice?: string;
+	tags?: string[];
+	notExplorableLend?: boolean;
+	notExplorableBorrow?: boolean;
+};
 export type EulerLabelAssetEntry = {
 	address?: string;
 	symbols?: string[];
@@ -114,6 +123,8 @@ export type EulerLabelsData = {
 	verifiedVaultAddresses: string[];
 	earnVaults: string[];
 	earnVaultEntries: Record<string, EulerLabelEarnVaultEntry>;
+	/** Address keys are lowercase. Populated for V3 vaults, including unnamed EVKs. */
+	vaultAnnotations?: Record<string, EulerLabelVaultAnnotation>;
 	earnVaultBlocks: Record<string, string[]>;
 	earnVaultRestrictions: Record<string, string[]>;
 	deprecatedEarnVaults: Record<string, string>;

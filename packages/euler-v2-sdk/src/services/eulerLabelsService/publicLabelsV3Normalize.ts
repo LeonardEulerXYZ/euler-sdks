@@ -5,6 +5,7 @@ import type {
 	EulerLabelPoint,
 	EulerLabelProduct,
 	EulerLabelVaultOverride,
+	EulerLabelVaultAnnotation,
 } from "../../entities/EulerLabels.js";
 import { createEmptyEulerLabelsData } from "../../utils/eulerLabels.js";
 import type {
@@ -144,9 +145,7 @@ const standaloneProductKey = (address: string): string =>
 export const hasPublishedVaultLabelContent = (
 	vault: PublicVaultLabel,
 ): boolean =>
-	Boolean(
-		vault.productId || vault.entityId || vault.name || vault.description,
-	);
+	Boolean(vault.productId || vault.entityId || vault.name || vault.description);
 
 const buildStandaloneProduct = (vault: PublicVaultLabel): EulerLabelProduct => {
 	const address = getAddress(vault.address);
@@ -235,6 +234,7 @@ const normalizeMetadata = (
 	const candidateVaultAddresses: string[] = [];
 	const candidateEarnVaultAddresses: string[] = [];
 	const earnVaultEntries: Record<string, EulerLabelEarnVaultEntry> = {};
+	const vaultAnnotations: Record<string, EulerLabelVaultAnnotation> = {};
 	const deprecatedEarnVaults: Record<string, string> = {};
 	const earnVaultDescriptions: Record<string, string> = {};
 	const earnVaultNotices: Record<string, string> = {};
@@ -270,6 +270,18 @@ const normalizeMetadata = (
 			}
 		} else if (!vault.isEscrow) {
 			candidateVaultAddresses.push(address);
+			if (!vault.productId) {
+				vaultAnnotations[lower] = {
+					...(vault.deprecated && { deprecated: true }),
+					...(vault.deprecationReason && {
+						deprecationReason: vault.deprecationReason,
+					}),
+					...(vault.portfolioNotice && {
+						portfolioNotice: vault.portfolioNotice,
+					}),
+					...(vault.tags.length > 0 && { tags: [...vault.tags] }),
+				};
+			}
 		}
 
 		if (vault.campaigns?.length) {
@@ -289,6 +301,7 @@ const normalizeMetadata = (
 		candidateVaultAddresses: uniqueStrings(candidateVaultAddresses),
 		candidateEarnVaultAddresses: uniqueStrings(candidateEarnVaultAddresses),
 		earnVaultEntries,
+		vaultAnnotations,
 		deprecatedEarnVaults,
 		earnVaultDescriptions,
 		earnVaultNotices,
@@ -314,8 +327,12 @@ const withListingFlags = (
 				vault
 					? {
 							...override,
-							notExplorableLend: vault.notExplorableLend === true,
-							notExplorableBorrow: vault.notExplorableBorrow === true,
+							...(vault.notExplorableLend != null && {
+								notExplorableLend: vault.notExplorableLend,
+							}),
+							...(vault.notExplorableBorrow != null && {
+								notExplorableBorrow: vault.notExplorableBorrow,
+							}),
 						}
 					: override,
 			];
@@ -343,9 +360,9 @@ export const normalizePublicLabelsMetadata = (
 			.filter((vault) => vault.vaultType === "earn")
 			.map((vault) => [
 				vault.address.toLowerCase(),
-				(vault.productId !== null &&
-					productHidden.get(vault.productId) === true) ||
-					vault.notExplorableLend === true,
+				vault.notExplorableLend ??
+					(vault.productId !== null &&
+						productHidden.get(vault.productId) === true),
 			]),
 	);
 	return {
@@ -355,6 +372,25 @@ export const normalizePublicLabelsMetadata = (
 				id,
 				withListingFlags(product, productHidden.get(id), vaultsByAddress),
 			]),
+		),
+		vaultAnnotations: Object.fromEntries(
+			Object.entries(data.vaultAnnotations ?? {}).map(([lower, annotation]) => {
+				const vault = vaultsByAddress.get(getAddress(lower));
+				return [
+					lower,
+					vault
+						? {
+								...annotation,
+								...(vault.notExplorableLend != null && {
+									notExplorableLend: vault.notExplorableLend,
+								}),
+								...(vault.notExplorableBorrow != null && {
+									notExplorableBorrow: vault.notExplorableBorrow,
+								}),
+							}
+						: annotation,
+				];
+			}),
 		),
 		earnVaultEntries: Object.fromEntries(
 			Object.entries(data.earnVaultEntries).map(([lower, entry]) => [

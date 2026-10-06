@@ -8,6 +8,11 @@ import {
 	fetchAllPublicLabelPages,
 	getEulerLabelProductBrandEntityKeys,
 	hasPublishedVaultLabelContent,
+	getEulerLabelVaultNotice,
+	isEulerLabelVaultDeprecated,
+	isEulerLabelVaultNotExplorableLend,
+	isEulerLabelVaultNotExplorableBorrow,
+	isEulerLabelVaultRecentlyAdded,
 	normalizePublicLabelsData,
 	type PublicLabelsQuery,
 	type PublicLabelsRequest,
@@ -559,6 +564,23 @@ describe("normalizePublicLabelsData", () => {
 			]);
 		});
 
+		it("retains operational annotations without creating a nameless product", () => {
+			const data = normalize({
+				deprecated: true,
+				deprecationReason: "Retired",
+				portfolioNotice: "Withdraw when possible",
+				tags: ["recently added"],
+			});
+			expect(data.products).not.toHaveProperty(key);
+			expect(data.vaultAnnotations?.[ASSESSMENT_ONLY_EVK.toLowerCase()]).toMatchObject({
+				deprecated: true, deprecationReason: "Retired", portfolioNotice: "Withdraw when possible",
+				tags: ["recently added"],
+			});
+			expect(isEulerLabelVaultDeprecated(data, ASSESSMENT_ONLY_EVK)).toBe(true);
+			expect(getEulerLabelVaultNotice(data, ASSESSMENT_ONLY_EVK)).toBe("Withdraw when possible");
+			expect(isEulerLabelVaultRecentlyAdded(data, ASSESSMENT_ONLY_EVK)).toBe(true);
+		});
+
 		it.each([
 			{ name: "Named vault" },
 			{ description: "Described vault" },
@@ -760,11 +782,21 @@ describe("direct visibility coverage", () => {
 
 
 describe("metadata-only discovery flags", () => {
+  it("retains raw side flags on an annotation-only EVK", () => {
+    const source = structuredClone(publicLabelsFixture);
+    const unlabelled = source.vaults.find((vault) => vault.address === ASSESSMENT_ONLY_EVK)!;
+    source.vaults = [{ ...unlabelled, notExplorableLend: true, notExplorableBorrow: false, portfolioNotice: "Check before depositing" }];
+    const data = normalizePublicLabelsMetadata(1, source);
+    expect(data.products).not.toHaveProperty(`__vault_${ASSESSMENT_ONLY_EVK.toLowerCase()}`);
+    expect(isEulerLabelVaultNotExplorableLend(data, ASSESSMENT_ONLY_EVK)).toBe(true);
+    expect(isEulerLabelVaultNotExplorableBorrow(data, ASSESSMENT_ONLY_EVK)).toBe(false);
+    expect(getEulerLabelVaultNotice(data, ASSESSMENT_ONLY_EVK)).toBe("Check before depositing");
+  });
   it.each([
-    [true, null, null, true, false, false],
+    [true, null, null, true, undefined, undefined],
     [false, true, false, false, true, false],
     [null, false, true, false, false, true],
-    [null, null, null, false, false, false],
+    [null, null, null, false, undefined, undefined],
   ])("maps product=%s lend=%s borrow=%s without creating a verdict", (productHide, lendHide, borrowHide, expectedProduct, expectedLend, expectedBorrow) => {
     const source = structuredClone(publicLabelsFixture);
     source.products[0]!.notExplorable = productHide;
@@ -773,10 +805,24 @@ describe("metadata-only discovery flags", () => {
     const data = normalizePublicLabelsMetadata(1, source);
     const product = data.products["kpk-securitize"]!;
     expect(product.notExplorable).toBe(expectedProduct);
-    expect(product.vaultOverrides![getAddress(KPK_VAULT)]).toMatchObject({ notExplorableLend: expectedLend, notExplorableBorrow: expectedBorrow });
+    expect(product.vaultOverrides![getAddress(KPK_VAULT)]?.notExplorableLend).toBe(expectedLend);
+    expect(product.vaultOverrides![getAddress(KPK_VAULT)]?.notExplorableBorrow).toBe(expectedBorrow);
     expect(data.verifiedVaultAddresses).toEqual([]);
     expect(data).not.toHaveProperty("visibility");
     expect(normalizePublicLabelsData(1, source).products["kpk-securitize"]!.notExplorable).toBeUndefined();
+  });
+  it("lets an explicit false re-list a vault inside a hidden product", () => {
+    const source = structuredClone(publicLabelsFixture);
+    source.products[0]!.notExplorable = true;
+    source.vaults[0]!.notExplorableLend = false;
+    source.vaults[0]!.notExplorableBorrow = null;
+    const data = normalizePublicLabelsMetadata(1, source);
+    expect(isEulerLabelVaultNotExplorableLend(data, KPK_VAULT)).toBe(false);
+    expect(isEulerLabelVaultNotExplorableBorrow(data, KPK_VAULT)).toBe(true);
+
+    source.vaults[0]!.vaultType = "earn";
+    const earn = normalizePublicLabelsMetadata(1, source);
+    expect(earn.notExplorableEarnVaults.has(KPK_VAULT.toLowerCase())).toBe(false);
   });
   it("leaves the source and the assessed normalization untouched", () => {
     const source = structuredClone(publicLabelsFixture);
