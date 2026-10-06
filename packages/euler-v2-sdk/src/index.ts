@@ -33,6 +33,7 @@ export * from "./services/priceService/index.js";
 export * from "./services/rewardsService/index.js";
 export * from "./services/intrinsicApyService/index.js";
 export * from "./services/oracleAdapterService/index.js";
+export * from "./services/vaultAssessmentService/index.js";
 export * from "./services/feeFlowService/index.js";
 export * from "./services/reulLockService/index.js";
 export * from "./services/safeAccountService/index.js";

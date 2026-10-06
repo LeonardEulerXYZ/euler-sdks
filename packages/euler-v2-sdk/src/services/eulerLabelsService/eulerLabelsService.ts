@@ -338,6 +338,49 @@ const applyVaultOverrides = (
 	};
 };
 
+export interface EulerLabelsFileData {
+	entities: Record<string, EulerLabelEntity>;
+	products: Record<string, EulerLabelProduct>;
+	points: EulerLabelPoint[];
+	earnVaults: Array<string | EulerLabelEarnVaultEntry>;
+	assets: EulerLabelAssetEntry[];
+}
+
+/** Pure derivation for application-owned atomic file snapshots. Fetch failures belong to the caller. */
+export const normalizeEulerLabelsFileData = (
+	files: EulerLabelsFileData,
+): EulerLabelsData => {
+	const {
+		entities: entitiesRaw,
+		products: productsRaw,
+		points: pointsRaw,
+		earnVaults: earnRaw,
+		assets: assetsRaw,
+	} = files;
+	const normalizedProducts = normalizeProducts(productsRaw);
+	const earn = normalizeEarnVaults(earnRaw);
+	const assets = normalizeAssets(assetsRaw);
+
+	return {
+		...EMPTY_LABELS_DATA,
+		products: normalizedProducts.products,
+		verifiedVaultAddresses: normalizedProducts.vaultAddresses,
+		entities: normalizeEntities(entitiesRaw),
+		points: normalizePoints(pointsRaw),
+		earnVaults: earn.earnVaults,
+		earnVaultEntries: earn.earnVaultEntries,
+		earnVaultBlocks: earn.earnVaultBlocks,
+		earnVaultRestrictions: earn.earnVaultRestrictions,
+		deprecatedEarnVaults: earn.deprecatedEarnVaults,
+		earnVaultDescriptions: earn.earnVaultDescriptions,
+		earnVaultNotices: earn.earnVaultNotices,
+		notExplorableEarnVaults: earn.notExplorableEarnVaults,
+		assetBlocks: assets.assetBlocks,
+		assetRestrictions: assets.assetRestrictions,
+		assetPatternRules: assets.assetPatternRules,
+	};
+};
+
 export class EulerLabelsService implements IEulerLabelsService {
 	constructor(
 		private adapter: IEulerLabelsAdapter,
@@ -396,28 +439,13 @@ export class EulerLabelsService implements IEulerLabelsService {
 				),
 			]);
 
-		const normalizedProducts = normalizeProducts(productsRaw);
-		const earn = normalizeEarnVaults(earnRaw);
-		const assets = normalizeAssets(assetsRaw);
-
-		return {
-			...EMPTY_LABELS_DATA,
-			products: normalizedProducts.products,
-			verifiedVaultAddresses: normalizedProducts.vaultAddresses,
-			entities: normalizeEntities(entitiesRaw),
-			points: normalizePoints(pointsRaw),
-			earnVaults: earn.earnVaults,
-			earnVaultEntries: earn.earnVaultEntries,
-			earnVaultBlocks: earn.earnVaultBlocks,
-			earnVaultRestrictions: earn.earnVaultRestrictions,
-			deprecatedEarnVaults: earn.deprecatedEarnVaults,
-			earnVaultDescriptions: earn.earnVaultDescriptions,
-			earnVaultNotices: earn.earnVaultNotices,
-			notExplorableEarnVaults: earn.notExplorableEarnVaults,
-			assetBlocks: assets.assetBlocks,
-			assetRestrictions: assets.assetRestrictions,
-			assetPatternRules: assets.assetPatternRules,
-		};
+		return normalizeEulerLabelsFileData({
+			entities: entitiesRaw,
+			products: productsRaw,
+			points: pointsRaw,
+			earnVaults: earnRaw,
+			assets: assetsRaw,
+		});
 	}
 
 	async populateLabels(vaults: ERC4626Vault[]): Promise<void> {
@@ -499,16 +527,23 @@ export class EulerLabelsService implements IEulerLabelsService {
 			}));
 
 			const earnVault = labelsData.earnVaultEntries[addrLower];
+			const vaultAnnotation = labelsData.vaultAnnotations?.[addrLower];
 			const earnDeprecationReason = labelsData.deprecatedEarnVaults[addrLower];
 			const deprecationReason =
-				deprecatedVaultsMap.get(addrLower) ?? earnDeprecationReason;
+				deprecatedVaultsMap.get(addrLower) ??
+				earnDeprecationReason ??
+				(vaultAnnotation?.deprecated
+					? (vaultAnnotation.deprecationReason ?? "")
+					: undefined);
 
 			const hasAnyLabel =
 				products.length > 0 ||
 				entities.length > 0 ||
 				points.length > 0 ||
 				deprecationReason !== undefined ||
-				earnVault !== undefined;
+				earnVault !== undefined ||
+				(vaultAnnotation !== undefined &&
+					Object.keys(vaultAnnotation).length > 0);
 
 			if (hasAnyLabel) {
 				vault.eulerLabel = {
@@ -523,6 +558,9 @@ export class EulerLabelsService implements IEulerLabelsService {
 					...(earnVault?.description && { description: earnVault.description }),
 					...(earnVault?.portfolioNotice && {
 						portfolioNotice: earnVault.portfolioNotice,
+					}),
+					...(vaultAnnotation?.portfolioNotice && {
+						portfolioNotice: vaultAnnotation.portfolioNotice,
 					}),
 					...(earnVault?.notExplorable && { notExplorable: true }),
 					...(earnVault?.block && { block: earnVault.block }),

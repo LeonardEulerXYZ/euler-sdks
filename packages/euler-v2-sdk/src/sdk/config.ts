@@ -100,6 +100,7 @@ export interface EulerSDKConfig {
 	oracleAdapterV3ApiKey?: string;
 	oracleAdapterV3PageSize?: number;
 	oracleAdapterV3CacheMs?: number;
+	vaultAssessmentV3CacheMs?: number;
 
 	feeFlowControllerAddress?: Address;
 	feeFlowControllerUtilAddress?: Address;
@@ -568,6 +569,10 @@ export function readEulerSDKEnvConfig(
 		oracleAdapterV3CacheMs: readNumber(
 			env,
 			"EULER_SDK_ORACLE_ADAPTER_V3_CACHE_MS",
+		),
+		vaultAssessmentV3CacheMs: readNumber(
+			env,
+			"EULER_SDK_VAULT_ASSESSMENT_V3_CACHE_MS",
 		),
 
 		feeFlowControllerAddress: readString(

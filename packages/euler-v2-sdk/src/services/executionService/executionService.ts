@@ -16,6 +16,7 @@ import type {
 	AddressOrAccount,
 	IHasVaultAddress,
 } from "../../entities/Account.js";
+import type { AssetAllowanceRead } from "../../entities/Wallet.js";
 import type { EulerPlugin, PluginPrefetchData } from "../../plugins/types.js";
 import { resolveBorrowCollateralPositions } from "../../utils/accountPositionClassification.js";
 import type { IDeploymentService } from "../deploymentService/index.js";
@@ -819,6 +820,8 @@ export type PrefetchPlanPlugins = (
 ) => Promise<PluginPrefetchData>;
 
 const WAD = 10n ** 18n;
+// A permit that lapses before the transaction mines reverts on chain, so near-expiry counts as expired.
+const PERMIT2_EXPIRY_MARGIN_SECONDS = 60;
 // TODO explain how this service is coupled to the concrete abis of ERC4626, permit2 and EVK.
 // this is a helper service, not a generic one.
 export class ExecutionService<TVaultEntity extends VaultEntity = VaultEntity>
@@ -2072,9 +2075,8 @@ export class ExecutionService<TVaultEntity extends VaultEntity = VaultEntity>
 				const approval = item as RequiredApproval;
 				const { token, owner, spender, amount } = approval;
 
-				// Get wallet asset and allowances for the specific spender
 				const walletAsset = wallet.getAsset(token);
-				const allowances = walletAsset?.allowances[spender];
+				const allowances = walletAsset?.allowances[getAddress(spender)];
 
 				const resolvedItems: (ApproveCall | Permit2DataToSign)[] = [];
 
@@ -2096,12 +2098,12 @@ export class ExecutionService<TVaultEntity extends VaultEntity = VaultEntity>
 				const addApproveWithOptionalReset = (
 					approvalSpender: Address,
 					approvalAmount: bigint,
-					currentAllowance: bigint,
+					currentAllowance: bigint | undefined,
 				) => {
-					if (
-						currentAllowance > 0n &&
-						requiresZeroApprovalReset(chainId, token)
-					) {
+					// An unreadable allowance may be non-zero; a reset of an already-zero allowance never reverts.
+					const mayHoldAllowance =
+						currentAllowance === undefined || currentAllowance > 0n;
+					if (mayHoldAllowance && requiresZeroApprovalReset(chainId, token)) {
 						resolvedItems.push(makeApprove(approvalSpender, 0n));
 					}
 					resolvedItems.push(makeApprove(approvalSpender, approvalAmount));
@@ -2118,16 +2120,13 @@ export class ExecutionService<TVaultEntity extends VaultEntity = VaultEntity>
 					amount: permit2Amount,
 				});
 
-				// If no wallet asset data, assume approval is needed
 				if (!walletAsset || !allowances) {
 					if (usePermit2) {
-						// Need approval to permit2 and permit2 signature
 						resolvedItems.push(makeApprove(permit2, maxUint256));
 						resolvedItems.push(
 							makePermit2(spender, unlimitedApproval ? maxUint160 : amount),
 						);
 					} else {
-						// Regular approval
 						resolvedItems.push(
 							makeApprove(spender, unlimitedApproval ? maxUint256 : amount),
 						);
@@ -2136,55 +2135,54 @@ export class ExecutionService<TVaultEntity extends VaultEntity = VaultEntity>
 					continue;
 				}
 
+				const failedReads = allowances.failedReads ?? [];
+				const readAllowance = (read: AssetAllowanceRead): bigint | undefined =>
+					failedReads.includes(read) ? undefined : allowances[read];
+				const assetForVault = readAllowance("assetForVault");
+
 				if (usePermit2) {
-					// Skip Permit2 entirely when an existing direct token→vault
-					// allowance already covers the requirement. Avoids prompting
-					// the user for a Permit2 approve+signature when a prior
-					// direct ERC-20 approval is sufficient.
-					if (allowances.assetForVault >= amount) {
+					// A direct allowance that already covers the amount spares the Permit2 approve and signature.
+					if (assetForVault !== undefined && assetForVault >= amount) {
 						approval.resolved = [];
 						continue;
 					}
 
-					// Check permit2 allowances
-					const assetForPermit2 = allowances.assetForPermit2;
-					const assetForVaultInPermit2 = allowances.assetForVaultInPermit2;
+					const assetForPermit2 = readAllowance("assetForPermit2");
+					const assetForVaultInPermit2 = readAllowance(
+						"assetForVaultInPermit2",
+					);
 					const permit2ExpirationTime = allowances.permit2ExpirationTime;
+					// Permit2 moves at most uint160 per transfer; the signed permit is capped to it.
+					const permit2Amount = amount > maxUint160 ? maxUint160 : amount;
 
-					// Check if permit2 signature has expired
 					const currentTime = Math.floor(Date.now() / 1000);
 					const isPermit2Expired =
-						permit2ExpirationTime > 0 && currentTime >= permit2ExpirationTime;
+						permit2ExpirationTime > 0 &&
+						currentTime + PERMIT2_EXPIRY_MARGIN_SECONDS >=
+							permit2ExpirationTime;
 
-					const hasSufficientPermit2Allowance = assetForPermit2 >= amount;
+					const hasSufficientPermit2Allowance =
+						assetForPermit2 !== undefined && assetForPermit2 >= permit2Amount;
 					const hasSufficientVaultAllowance =
-						assetForVaultInPermit2 >= amount && !isPermit2Expired;
+						assetForVaultInPermit2 !== undefined &&
+						assetForVaultInPermit2 >= permit2Amount &&
+						!isPermit2Expired;
 
-					// If both are sufficient, no approval needed
 					if (hasSufficientPermit2Allowance && hasSufficientVaultAllowance) {
 						approval.resolved = [];
 						continue;
 					}
 
-					// If assetForPermit2 is insufficient, we need both approval and permit2 signature
 					if (!hasSufficientPermit2Allowance) {
 						addApproveWithOptionalReset(permit2, maxUint256, assetForPermit2);
-						resolvedItems.push(
-							makePermit2(spender, unlimitedApproval ? maxUint160 : amount),
-						);
-					} else {
-						// assetForPermit2 is sufficient, but vault allowance is insufficient or expired
-						// Only need permit2 signature
-						resolvedItems.push(
-							makePermit2(spender, unlimitedApproval ? maxUint160 : amount),
-						);
 					}
-
+					resolvedItems.push(
+						makePermit2(spender, unlimitedApproval ? maxUint160 : amount),
+					);
 					approval.resolved = resolvedItems;
 				} else {
-					// Regular approval (non-permit2 path)
-					const assetForVault = allowances.assetForVault;
-					const needsDirectApproval = assetForVault < amount;
+					const needsDirectApproval =
+						assetForVault === undefined || assetForVault < amount;
 
 					if (!needsDirectApproval) {
 						approval.resolved = [];

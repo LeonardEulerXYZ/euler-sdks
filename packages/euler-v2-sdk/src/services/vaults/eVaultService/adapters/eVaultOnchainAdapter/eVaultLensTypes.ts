@@ -1,4 +1,4 @@
-import type { OracleDetailedInfo } from "src/utils/oracle.js";
+import type { OracleDetailedInfo } from "../../../../../utils/oracle.js";
 import type { Address, Hex } from "viem";
 
 export interface LTVInfo {

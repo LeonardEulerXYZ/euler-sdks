@@ -1,6 +1,8 @@
 # Labels
 
-Labels are purely off-chain metadata sourced from [`euler-labels`](https://github.com/euler-xyz/euler-labels). They have no effect on any on-chain calculations, pricing, or risk parameters. The labels provided by the SDK are the same data used by the official Euler UI.
+Labels are purely off-chain metadata. They have no effect on any on-chain calculations, pricing, or risk parameters.
+
+The default `EulerLabelsService` configuration reads the file-based [`euler-labels`](https://github.com/euler-xyz/euler-labels) dataset. The SDK also exposes `PublicLabelsV3Adapter` for the versioned Public Labels API.
 
 ## What labels provide
 
@@ -9,6 +11,8 @@ Labels are purely off-chain metadata sourced from [`euler-labels`](https://githu
 - **Points** &mdash; third-party points programs available on specific vaults
 - **Euler Earn entries** &mdash; Earn vault membership, descriptions, notices, block/restricted countries, classification tags, and deprecated/not-explorable flags
 - **Asset rules** &mdash; explicit or pattern-based block/restricted-country rules
+
+The country fields (`block`/`restricted` on products, overrides and Earn entries, `earnVaultBlocks`, `earnVaultRestrictions`, `assetBlocks`, `assetRestrictions`, `assetPatternRules`) are populated only by the file-based dataset. Under the V3 adapters they are always empty and the helpers that read them answer nothing: the bundle carries the live rules as `rawGeoPolicies` and the application evaluates them itself (see [Public Labels V3](#public-labels-v3)).
 
 ## Usage
 
@@ -69,3 +73,80 @@ isEulerLabelProductKeyring(labelsData, productKey)
 ```
 
 `isEulerLabelVaultRecentlyAdded(labelsData, vaultAddress)` resolves the `recently added` tag from product, vault override, or Earn-entry tags. To check any other tag, read `tags` directly off the resolved product, vault override, or Earn entry.
+
+## Public Labels V3
+
+Use `PublicLabelsV3Adapter` when an application consumes the versioned Public Labels dataset directly:
+
+```typescript
+import {
+  PublicLabelsV3Adapter,
+  getEulerLabelProductBrandEntities,
+  normalizePublicLabelsData,
+} from '@eulerxyz/euler-v2-sdk/public-labels'
+
+const labels = new PublicLabelsV3Adapter({
+  labelSet: 'public', // defaults to public
+  version: 'latest', // or an immutable publication key
+  endpoint: 'https://v3.euler.finance/v3',
+})
+
+const snapshot = await labels.fetchPublicLabelsSnapshot(1)
+const labelsData = normalizePublicLabelsData(1, snapshot.publicLabels)
+
+console.log(snapshot.version)
+
+const product = labelsData.products['kpk-securitize']
+const brands = product
+  ? getEulerLabelProductBrandEntities(product, labelsData.entities)
+  : []
+```
+
+By default, runtime reads select `public` / `latest`. Configure `labelSet` and `version` on the adapter to select another published dataset or pin metadata. The adapter resolves `latest` within that set once, then includes the set and concrete version on vault/product labels and entity profiles. A concrete key is confirmed against the set's published versions in the same way before any labels read. An explicit method version overrides the configured default. Unsupported selector shapes, draft selectors and unavailable publications fail without falling back to the public dataset. Geo policies, entity addresses, platform tags and visibility are live overlays. A concrete publication key pins metadata but does not freeze those overlays:
+
+```typescript
+const snapshot = await labels.fetchPublicLabelsSnapshot(
+  1,
+  'v20260804151305236',
+)
+```
+
+The adapter follows `meta.total` for all list endpoints with `limit=100` and `offset`, fetches managing and co-brand entity profiles, and normalizes the result into `EulerLabelsData`. Product ownership stays in `product.entity`; display-only partners are exposed through `product.coBrandEntityIds`.
+
+Applications can inject `request` to route reads through their own proxy, authentication, caching, and stale-response policy:
+
+```typescript
+const labels = new PublicLabelsV3Adapter({
+  endpoint: 'https://app.example/api/internal/v3',
+  request: async (path, query) => {
+    return appOwnedPublicLabelsRequest(path, query)
+  },
+})
+```
+
+`rawGeoPolicies` contains live rules with `countriesResolved`; the application owns country evaluation and enforcement. The adapter reads `/labels/vaults` and `/labels/products` with `view=resolved` and global `/labels/entities` profiles and address lists. Visibility comes from the same `/labels/vaults` enumeration read with `include=visibility`, which attaches the live verdict to every labelled row on every chain, including chains without an indexer; a row whose verdict is not evaluated yet (`null`) is read directly from `/evk/vaults/{chainId}/{address}/visibility` (or `/earn/...`). No vault inventory is walked. `visibility` exposes the verdict for labelled vaults keyed by lowercase vault address. Trusted membership requires a managing entity and a visible or warning verdict; metadata remains available for hidden and pending records. This membership is not a full governance-verification badge. Applications retain their stronger verification rule and own freshness, caching and outage handling.
+
+
+`fetchPublicGeoPolicies(request)` reads and validates the complete live geo collection across all chains. Validation rejects missing resolved countries, invalid scopes/addresses, duplicate IDs and malformed regexes; an authored empty collection is valid. `validatePublicGeoPolicies(value)` applies the same validation to an application-owned checkpoint.
+
+Applications with a durable geo cache can pass its validated policies as the third argument to `fetchPublicLabelsSnapshot(chainId, version, geoPolicies)`. The adapter validates the supplied collection and embeds it atomically with metadata, without a second geo request. Omitting it performs the ordinary live fetch. Persisted timestamps, stale-on-error decisions and country enforcement remain application-owned.
+
+
+`normalizeEulerLabelsFileData(files)` derives the same `EulerLabelsData` shape from an already-fetched `{entities, products, points, earnVaults, assets}` file collection. Application-owned static loaders can require every document to succeed before invoking it and provide their own durable checkpoint. It performs no network reads; V3 adapters remain independent of file authoring.
+
+## Vault assessments
+
+`sdk.vaultAssessmentService.fetchVaultAssessment(chainId, vaultAddress, family)` reads the raw EVK or Earn assessment from `/v3/{evk|earn}/vaults/{chainId}/{address}/assessment`. The service also has a root export, `VaultAssessmentService`, for applications that construct it separately. `family` is `evk` or `earn`.
+
+```typescript
+const assessment = await sdk.vaultAssessmentService.fetchVaultAssessment(
+  chainId,
+  vaultAddress,
+  'evk',
+)
+// assessment is undefined when V3 has no assessment for this vault.
+```
+
+The parsed result contains `configStatus`, `checksStatus`, configuration and consistency findings, timestamps and `assessed`. Findings retain V3's `outcome` (`pass`, `fail`, `unknown` or `not_applicable`), `description`, optional `cause`, and optional `exempted` marker. An exempted failure is still a failure in the raw result; the application decides how to present accepted exceptions. Assessments are separate from the effective visibility verdict and do not establish verified membership or an overall risk rating.
+
+Results are cached for five minutes by default; pass `{ fresh: true }` to request the endpoint again. A normal 404 returns `undefined`. A V3 `CHAIN_NOT_SUPPORTED` response throws `VaultAssessmentUnavailableError` with reason `chain-not-supported`, and an SDK built with `disableV3: true` throws the same typed error with reason `v3-disabled`. Applications can check either case with `isVaultAssessmentUnavailableError(error, reason)`. Other request or validation failures throw normally. Freshness policy, retries and UI wording belong to the application.

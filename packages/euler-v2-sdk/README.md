@@ -103,7 +103,7 @@ All docs are in [`./docs`](./docs).
 22. [Account Computed Properties](./docs/account-computed-properties.md) - Health factor/LTV/net-value computed fields and data prerequisites.
 23. [Caching External Data Queries](./docs/caching-external-data-queries.md) - `query*` decoration pattern for caching/logging/profiling.
 24. [Plugins](./docs/plugins.md) - Plugin system for read-path and plan-path extensions.
-25. [Labels](./docs/labels.md) - Label metadata model and usage.
+25. [Labels and vault assessments](./docs/labels.md) - Published metadata, visibility and raw assessment reads.
 26. [Decoding Smart Contract Errors](./docs/decode-smart-contract-errors.md) - Revert decoding utilities for better error handling.
 27. [Entity Diagnostics](./docs/entity-diagnostics.md) - Sidecar metadata for data normalization, fallbacks, and per-field warnings.
 
@@ -122,3 +122,19 @@ Git tags and GitHub Releases are the release-note source of truth. The committed
 The publish flow verifies npm auth, runs `pnpm -C packages/euler-v2-sdk run release:check`, creates and pushes an `euler-v2-sdk-vX.Y.Z` tag from the selected `main` commit, temporarily writes the tag version for npm, dry-runs the package, publishes with `npm publish --access public --provenance=false`, restores the working tree, and creates the GitHub Release against the verified tag from a generated notes file. Prereleases publish with the matching npm dist-tag, for example `npm publish --access public --tag beta --provenance=false`.
 
 Publishing uses the operator's local npm session. npm may prompt for a one-time password or provide a browser authentication URL; complete that prompt before the publish process exits.
+
+### V3 labels without assessments
+
+`PublicLabelsV3MetadataAdapter` reads published labels, entity profiles/addresses and live geo policies without visibility: it enumerates `/labels/vaults` without `include=visibility` and never reads a direct verdict. Select it explicitly for consumers that perform their own verification; it is not an automatic fallback from `PublicLabelsV3Adapter`.
+
+```ts
+import { PublicLabelsV3MetadataAdapter, normalizePublicLabelsMetadata } from '@eulerxyz/euler-v2-sdk/public-labels';
+
+const adapter = new PublicLabelsV3MetadataAdapter({ endpoint: 'https://v3.euler.finance', labelSet: 'public' });
+const snapshot = await adapter.fetchPublicLabelsSnapshot(146);
+const metadata = normalizePublicLabelsMetadata(146, snapshot.publicLabels);
+// metadata.candidateVaultAddresses / candidateEarnVaultAddresses are fetch candidates.
+// verifiedVaultAddresses and earnVaults remain empty; independent verification is required.
+```
+
+The snapshot carries `source: 'v3-metadata'` and no visibility verdicts. Metadata-only normalization preserves product `notExplorable` and vault `notExplorableLend`/`notExplorableBorrow` flags; Earn uses its lend-side flag plus product hiding. Deprecation alone does not hide a vault. Assessed normalization remains independent of these raw flags. Both adapters share publication selection and metadata mapping; the assessed adapter still requires live verdicts, attached to the labels enumeration by `include=visibility` or read directly for rows not evaluated yet. The application owns chain selection, governance verification, discovery and geo enforcement.

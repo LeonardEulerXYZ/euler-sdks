@@ -34,6 +34,15 @@ const normalizeAddress = (address: string): string => {
 	}
 };
 
+const getVaultAnnotation = (data: EulerLabelsData, address: string) =>
+	data.vaultAnnotations?.[normalizeAddress(address).toLowerCase()];
+
+const vaultAnnotationHasTag = (
+	data: EulerLabelsData,
+	address: string,
+	tag: string,
+): boolean => getVaultAnnotation(data, address)?.tags?.includes(tag) ?? false;
+
 export const applyEulerLabelVaultOverrides = (
 	product: EulerLabelProduct,
 	vaultAddress: string,
@@ -68,6 +77,28 @@ export const getEulerLabelProductByVault = (
 			(product.deprecatedVaults?.includes(normalized) ?? false),
 	);
 };
+
+export const getEulerLabelProductBrandEntityKeys = (
+	product: EulerLabelProduct,
+): string[] => {
+	const ownerKeys = Array.isArray(product.entity)
+		? product.entity
+		: [product.entity];
+	return [
+		...new Set([
+			...ownerKeys.filter((key): key is string => Boolean(key)),
+			...(product.coBrandEntityIds ?? []),
+		]),
+	];
+};
+
+export const getEulerLabelProductBrandEntities = (
+	product: EulerLabelProduct,
+	entities: Record<string, EulerLabelEntity>,
+): EulerLabelEntity[] =>
+	getEulerLabelProductBrandEntityKeys(product)
+		.map((key) => entities[key])
+		.filter((entity): entity is EulerLabelEntity => Boolean(entity));
 
 export const getEulerLabelProductKeyByVault = (
 	data: EulerLabelsData,
@@ -142,7 +173,12 @@ export const isEulerLabelVaultRecentlyAdded = (
 				product.vaults.includes(normalized) &&
 				(productHasTag(product, "recently added") ||
 					vaultOverrideHasTag(product, normalized, "recently added")),
-		) || earnVaultEntryHasTag(data.earnVaultEntries[normalized.toLowerCase()], "recently added")
+		) ||
+		vaultAnnotationHasTag(data, normalized, "recently added") ||
+		earnVaultEntryHasTag(
+			data.earnVaultEntries[normalized.toLowerCase()],
+			"recently added",
+		)
 	);
 };
 
@@ -190,6 +226,11 @@ export const getEulerLabelVaultNotice = (
 	const product = getEulerLabelProductByVault(data, normalized);
 	const override = product?.vaultOverrides?.[normalized];
 	if (override?.portfolioNotice !== undefined) return override.portfolioNotice;
+	const annotationNotice = getVaultAnnotation(
+		data,
+		normalized,
+	)?.portfolioNotice;
+	if (annotationNotice !== undefined) return annotationNotice;
 
 	return product?.portfolioNotice ?? "";
 };
@@ -201,7 +242,10 @@ export const isEulerLabelVaultNoticeSpecific = (
 	if (getEulerLabelEarnVaultNotice(data, vaultAddress)) return true;
 	const normalized = normalizeAddress(vaultAddress);
 	const product = getEulerLabelProductByVault(data, normalized);
-	return product?.vaultOverrides?.[normalized]?.portfolioNotice !== undefined;
+	return (
+		product?.vaultOverrides?.[normalized]?.portfolioNotice !== undefined ||
+		getVaultAnnotation(data, normalized)?.portfolioNotice !== undefined
+	);
 };
 
 export const isEulerLabelVaultDeprecated = (
@@ -210,16 +254,23 @@ export const isEulerLabelVaultDeprecated = (
 ): boolean => {
 	const normalized = normalizeAddress(vaultAddress);
 	if (normalized.toLowerCase() in data.deprecatedEarnVaults) return true;
-	return Object.values(data.products).some(
-		(product) => product.deprecatedVaults?.includes(normalized) ?? false,
+	return (
+		getVaultAnnotation(data, normalized)?.deprecated === true ||
+		Object.values(data.products).some(
+			(product) => product.deprecatedVaults?.includes(normalized) ?? false,
+		)
 	);
 };
 
 export const isEulerLabelVaultNotExplorable = (
 	data: EulerLabelsData,
 	vaultAddress: string,
-): boolean =>
-	getEulerLabelProductByVault(data, vaultAddress)?.notExplorable === true;
+): boolean => {
+	return (
+		isEulerLabelVaultNotExplorableLend(data, vaultAddress) &&
+		isEulerLabelVaultNotExplorableBorrow(data, vaultAddress)
+	);
+};
 
 export const isEulerLabelVaultNotExplorableLend = (
 	data: EulerLabelsData,
@@ -227,8 +278,10 @@ export const isEulerLabelVaultNotExplorableLend = (
 ): boolean => {
 	const normalized = normalizeAddress(vaultAddress);
 	const product = getEulerLabelProductByVault(data, normalized);
-	if (product?.notExplorable === true) return true;
-	return product?.vaultOverrides?.[normalized]?.notExplorableLend === true;
+	const override = product?.vaultOverrides?.[normalized]?.notExplorableLend;
+	if (override !== undefined) return override;
+	const annotation = getVaultAnnotation(data, normalized)?.notExplorableLend;
+	return annotation ?? product?.notExplorable === true;
 };
 
 export const isEulerLabelVaultNotExplorableBorrow = (
@@ -237,8 +290,10 @@ export const isEulerLabelVaultNotExplorableBorrow = (
 ): boolean => {
 	const normalized = normalizeAddress(vaultAddress);
 	const product = getEulerLabelProductByVault(data, normalized);
-	if (product?.notExplorable === true) return true;
-	return product?.vaultOverrides?.[normalized]?.notExplorableBorrow === true;
+	const override = product?.vaultOverrides?.[normalized]?.notExplorableBorrow;
+	if (override !== undefined) return override;
+	const annotation = getVaultAnnotation(data, normalized)?.notExplorableBorrow;
+	return annotation ?? product?.notExplorable === true;
 };
 
 const productHasTag = (
@@ -275,7 +330,8 @@ export const isEulerLabelVaultKeyring = (
 	const product = getEulerLabelProductByVault(data, normalized);
 	return (
 		productHasTag(product, "keyring") ||
-		vaultOverrideHasTag(product, normalized, "keyring")
+		vaultOverrideHasTag(product, normalized, "keyring") ||
+		vaultAnnotationHasTag(data, normalized, "keyring")
 	);
 };
 
@@ -292,7 +348,8 @@ export const isEulerLabelVaultAccessControlled = (
 	const product = getEulerLabelProductByVault(data, normalized);
 	return (
 		productHasTag(product, "access control") ||
-		vaultOverrideHasTag(product, normalized, "access control")
+		vaultOverrideHasTag(product, normalized, "access control") ||
+		vaultAnnotationHasTag(data, normalized, "access control")
 	);
 };
 
@@ -304,7 +361,8 @@ export const isEulerLabelVaultGovernanceLimited = (
 	const product = getEulerLabelProductByVault(data, normalized);
 	return (
 		productHasTag(product, "governance limited") ||
-		vaultOverrideHasTag(product, normalized, "governance limited")
+		vaultOverrideHasTag(product, normalized, "governance limited") ||
+		vaultAnnotationHasTag(data, normalized, "governance limited")
 	);
 };
 
@@ -320,7 +378,8 @@ export const isEulerLabelVaultHighUtilisationWarningSuppressed = (
 			product,
 			normalized,
 			"suppress high utilisation warning",
-		)
+		) ||
+		vaultAnnotationHasTag(data, normalized, "suppress high utilisation warning")
 	);
 };
 
@@ -332,7 +391,8 @@ export const isEulerLabelVaultCyclicalNote = (
 	const product = getEulerLabelProductByVault(data, normalized);
 	return (
 		productHasTag(product, "cyclical note") ||
-		vaultOverrideHasTag(product, normalized, "cyclical note")
+		vaultOverrideHasTag(product, normalized, "cyclical note") ||
+		vaultAnnotationHasTag(data, normalized, "cyclical note")
 	);
 };
 
