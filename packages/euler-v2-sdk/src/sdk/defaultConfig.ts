@@ -1,5 +1,5 @@
 import type { AccountV3AdapterConfig } from "../services/accountService/accountServiceConfig.js";
-import type { DeploymentServiceConfig } from "src/services/deploymentService/deploymentService.js";
+import type { DeploymentServiceConfig } from "../services/deploymentService/deploymentService.js";
 import type { AccountVaultsSubgraphAdapterConfig } from "../services/accountService/adapters/accountOnchainAdapter/accountVaultsSubgraphAdapter.js";
 import type { EVaultV3AdapterConfig } from "../services/vaults/eVaultService/eVaultServiceConfig.js";
 import type { EulerEarnV3AdapterConfig } from "../services/vaults/eulerEarnService/index.js";
