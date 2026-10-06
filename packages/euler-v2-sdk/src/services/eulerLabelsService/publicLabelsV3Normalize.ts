@@ -190,7 +190,7 @@ const normalizeMetadata = (
 		vaultsByProduct.set(vault.productId, rows);
 	}
 
-	const products: Record<string, EulerLabelProduct> = {};
+	const products: Record<string, EulerLabelProduct> = Object.create(null);
 	for (const product of productRows) {
 		products[product.id] = buildProduct(
 			product,
@@ -200,7 +200,7 @@ const normalizeMetadata = (
 
 	for (const vault of chainVaults) {
 		if (vault.productId) {
-			if (!products[vault.productId]) {
+			if (!Object.hasOwn(products, vault.productId)) {
 				throw new Error(
 					`Public Labels vault references missing product ${vault.productId}`,
 				);

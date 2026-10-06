@@ -570,6 +570,10 @@ export function readEulerSDKEnvConfig(
 			env,
 			"EULER_SDK_ORACLE_ADAPTER_V3_CACHE_MS",
 		),
+		vaultAssessmentV3CacheMs: readNumber(
+			env,
+			"EULER_SDK_VAULT_ASSESSMENT_V3_CACHE_MS",
+		),
 
 		feeFlowControllerAddress: readString(
 			env,

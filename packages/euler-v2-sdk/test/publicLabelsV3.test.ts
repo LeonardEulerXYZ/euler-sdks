@@ -382,6 +382,46 @@ describe("PublicLabelsV3Adapter", () => {
 });
 
 describe("normalizePublicLabelsData", () => {
+	it.each(["__proto__", "constructor"])(
+		"retains product ID %s as an own entry in assessed and metadata labels",
+		(productId) => {
+			const source = {
+				...publicLabelsFixture,
+				products: publicLabelsFixture.products.map((product) => ({
+					...product,
+					id: productId,
+				})),
+				vaults: publicLabelsFixture.vaults.map((vault) =>
+					vault.address === KPK_VAULT ? { ...vault, productId } : vault,
+				),
+			};
+			const assessed = normalizePublicLabelsData(1, source);
+			const metadata = normalizePublicLabelsMetadata(1, source);
+
+			expect(Object.hasOwn(assessed.products, productId)).toBe(true);
+			expect(assessed.products[productId]?.vaults).toContain(getAddress(KPK_VAULT));
+			expect(assessed.verifiedVaultAddresses).toContain(getAddress(KPK_VAULT));
+			expect(Object.hasOwn(metadata.products, productId)).toBe(true);
+		},
+	);
+
+	it.each(["__proto__", "constructor"])(
+		"rejects a vault referencing missing product ID %s",
+		(productId) => {
+			const source = {
+				...publicLabelsFixture,
+				products: [],
+				vaults: publicLabelsFixture.vaults.map((vault) =>
+					vault.address === KPK_VAULT ? { ...vault, productId } : vault,
+				),
+			};
+
+			expect(() => normalizePublicLabelsData(1, source)).toThrow(
+				`Public Labels vault references missing product ${productId}`,
+			);
+		},
+	);
+
 	it.each([
 		"hidden",
 		"pending_review",
