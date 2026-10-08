@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { erc20Abi, getAddress, type Address, type PublicClient } from "viem";
-import { TokenlistService } from "../src/services/tokenlistService/index.js";
+import { TokenlistService, type ITokenlistService } from "../src/services/tokenlistService/index.js";
 import type { IProviderService } from "../src/services/providerService/index.js";
 import { buildEulerSDK } from "../src/sdk/buildSDK.js";
 import { createQueryCacheBuildQuery } from "../src/utils/buildQuery.js";
@@ -19,6 +19,15 @@ function setup(readContract = vi.fn().mockResolvedValue(6)) {
 }
 
 describe("on-demand token decimals", () => {
+	it("keeps existing list-only service overrides valid", () => {
+		const legacyOverride: ITokenlistService = {
+			loadTokenlist: async () => [],
+			getToken: () => undefined,
+			isLoaded: () => false,
+		};
+		expect(legacyOverride.resolveTokenDecimals).toBeUndefined();
+	});
+
 	it("uses the SDK provider without list loading or construction-time reads", async () => {
 		const { getProvider, readContract } = setup();
 		const sdk = await buildEulerSDK({ servicesOverrides: {

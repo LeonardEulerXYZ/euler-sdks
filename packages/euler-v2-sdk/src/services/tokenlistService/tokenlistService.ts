@@ -33,8 +33,8 @@ interface ApiTokenListPage {
 type ApiTokenListResponse = ApiToken[] | ApiTokenListPage;
 
 export interface ITokenlistService {
-	/** Resolve on-chain ERC20 decimals; rejects on unavailable or invalid reads. */
-	resolveTokenDecimals(chainId: number, asset: Address): Promise<number>;
+	/** Optional for custom list-only service overrides; built-in services provide it. */
+	resolveTokenDecimals?(chainId: number, asset: Address): Promise<number>;
 	loadTokenlist(chainId: number): Promise<TokenListItem[]>;
 	getToken(chainId: number, asset: Address): TokenListItem | undefined;
 	isLoaded(chainId: number): boolean;

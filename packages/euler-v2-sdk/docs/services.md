@@ -59,6 +59,9 @@ All fetch-option types support `populateAll?: boolean`. When `true`, the service
 
 ```typescript
 // Resolve only the ERC20 selected by the caller, before human-unit conversion.
+if (!sdk.tokenlistService.resolveTokenDecimals) {
+  throw new Error("Token decimals are unavailable with this token-list service");
+}
 const decimals = await sdk.tokenlistService.resolveTokenDecimals(chainId, asset);
 const amount = parseUnits(inputAmount, decimals); // parseUnits from viem
 ```
@@ -83,7 +86,9 @@ change later.
 `buildEulerSDK` wires its provider automatically. Standalone construction accepts
 it as the third argument: `new TokenlistService(config, buildQuery, providerService)`.
 Existing list-only construction still works; resolving decimals without a provider
-rejects. Custom `ITokenlistService` overrides must implement the new resolver.
+rejects. The resolver is optional on `ITokenlistService` so existing custom
+list-only overrides remain compatible. Callers using a custom override must
+check that the resolver exists before relying on it.
 Planners and raw-unit encoders remain unchanged and do not perform implicit reads.
 
 ## Service Capability Matrix
